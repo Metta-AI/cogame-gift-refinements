@@ -6,13 +6,24 @@
 ## every emitted order is inside its schema and every per-tick action leaves
 ## the world legal.
 
-import std/[monotimes, strutils, times]
+import std/[algorithm, monotimes, strutils, times]
 
 import ./helpers
 
 suite "baseline"
 
 const Seeds = 12
+
+# Every round of orders this test plays, in MICROSECONDS. The note's item 4
+# bound is "no more than 1 ms per round"; measuring in whole milliseconds (as
+# this test used to) floors a sub-millisecond figure to 0 and can only compare
+# against a bound 50x the note's, which is a bound on the runner's mood rather
+# than on the code (r1 review F9). The distribution is checked once, at the
+# bottom of the file, and printed.
+var
+  roundTimesUs: seq[int] = @[]
+  worstRoundUs = 0
+  worstRoundLabel = ""
 
 proc assertOrderIsLegal(
   order: Order, seat: int, view: SeatView, config: GameConfig, where: string
@@ -39,7 +50,6 @@ proc playAndAudit(
   kinds: array[SeatCount, Baseline], config: GameConfig, label: string
 ): SimServer =
   var sim = initSimServer(config)
-  var slowest = 0
   for round in 1 .. config.rounds:
     let started = getMonoTime()
     for slot in 0 ..< SeatCount:
@@ -49,7 +59,11 @@ proc playAndAudit(
         label & " round " & $round & " seat " & $slot)
       order.source = osScripted
       sim.holdOrder(slot, order)
-    slowest = max(slowest, (getMonoTime() - started).inMilliseconds.int)
+    let roundUs = (getMonoTime() - started).inMicroseconds.int
+    roundTimesUs.add(roundUs)
+    if roundUs > worstRoundUs:
+      worstRoundUs = roundUs
+      worstRoundLabel = label & " round " & $round
     for tick in 0 ..< config.ticksPerRound:
       let actions = sim.kernelActions()
       for slot in 0 ..< SeatCount:
@@ -72,10 +86,6 @@ proc playAndAudit(
             " at level " & $level)
     sim.closeRound()
   sim.finish(erComplete)
-  # Six seats' orders, all six baselines, must be microseconds -- they are
-  # called on the critical path of every round boundary.
-  check(slowest <= 50,
-    label & ": a round of baseline orders took " & $slowest & " ms")
   sim
 
 block everyRoomIsLegalOnEveryVariant:
@@ -129,5 +139,35 @@ block reciprocatorsKeepExchanging:
   check(pairsWithTraffic >= 2,
     "only " & $pairsWithTraffic & " pairs ever exchanged in both directions")
   banner "reciprocators that have exchanged once keep exchanging"
+
+block baselineOrdersCostLessThanAMillisecondPerRound:
+  ## The note's item 4: "neither baseline raises, and neither takes more than
+  ## 1 ms per round" -- six seats' orders, on the critical path of every round
+  ## boundary. The MEDIAN round is what the code costs and is held to the
+  ## note's figure; the worst single round keeps a wide outlier guard, because
+  ## this runs on a shared runner where a scheduler blip lands on whichever
+  ## round it likes and a gate that flakes is not a gate. Both figures are
+  ## printed, so the real cost is in the log rather than inferred (r1 review
+  ## F9).
+  check(roundTimesUs.len == VariantIds.len * Seeds * 3 * DefaultRounds,
+    "only " & $roundTimesUs.len & " rounds were timed; the measurement moved")
+  var ordered = roundTimesUs
+  ordered.sort()
+  let
+    median = ordered[ordered.len div 2]
+    p99 = ordered[(ordered.len * 99) div 100]
+  echo "  baseline orders per round over ", ordered.len, " rounds: median ",
+    median, " us, p99 ", p99, " us, worst ", worstRoundUs, " us (",
+    worstRoundLabel, ")"
+  check(median <= 1000,
+    "the median round of baseline orders took " & $median &
+    " us, over the note's 1 ms")
+  check(p99 <= 1000,
+    "the 99th-percentile round of baseline orders took " & $p99 &
+    " us, over the note's 1 ms")
+  check(worstRoundUs <= 50_000,
+    "the slowest round of baseline orders took " & $worstRoundUs & " us (" &
+    worstRoundLabel & ")")
+  banner "a round of baseline orders costs under the note's 1 ms at the median and p99"
 
 echo "test_baseline OK"
