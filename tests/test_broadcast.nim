@@ -10,7 +10,7 @@ import std/[algorithm, json, os, sets, strutils]
 
 import bitworld/spriteprotocol
 
-import gift_refinements/global
+import gift_refinements/[global, wire_constants]
 
 import ./helpers
 
@@ -237,9 +237,13 @@ block chromeCommonIsUnedited:
     "chrome_common.js is not the starter's file")
   check("window.CTF_WIRE" in chrome,
     "chrome_common.js reads a global this repo does not emit")
-  check("window.CTF_WIRE={" in readFile(
-      repoRoot / "src" / "gift_refinements" / "wire_constants.nim") or true,
-    "")
+  # The other half of that invariant, asserted on the const the engine actually
+  # emits rather than on a constant-true expression (r1 review F10): the same
+  # string `Dockerfile.replay-viewer` greps for in the generated
+  # wire_constants.js.
+  check(WireConstantsJs.startsWith("window.CTF_WIRE={"),
+    "the engine no longer emits the window.CTF_WIRE global chrome_common.js " &
+    "reads; it emits " & WireConstantsJs[0 .. min(31, WireConstantsJs.high)])
   banner "chrome_common.js is the starter's file, reading window.CTF_WIRE"
 
 block removedSurfacesAreGone:
