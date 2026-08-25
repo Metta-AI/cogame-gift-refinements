@@ -169,11 +169,11 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           # Same pin as coworld-release.yml's `uvx --from "coworld[auth]==0.1.38"`.
-          pip install "coworld==0.1.38" || {
-            echo "::warning::the pinned coworld package is unavailable to pip;"
-            echo "::warning::check_manifest_loads.py will SKIP with a warning"; }
+          pip install "coworld==0.1.38"
       - name: Load coworld_manifest_template.json with coworld's own loader
-        run: python3 tools/ci/check_manifest_loads.py coworld_manifest_template.json
+        run: |
+          python3 tools/ci/check_manifest_loads.py \
+            coworld_manifest_template.json compose.yaml
 
   # ---------------------------------------------------------------------
   # Packaging smoke: the production image builds, and one real episode runs
