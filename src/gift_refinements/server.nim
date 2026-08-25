@@ -416,10 +416,10 @@ proc runEpisode*(
 
   if reason == erDeadline or (reason == erComplete and sim.round < config.rounds):
     # Settle: autobank whatever is still held so the rounds actually played are
-    # scored honestly, then record one last frame carrying it.
-    sim.autobankAll()
-    if sim.frames.len > 0:
-      sim.frames[^1].tick = max(0, sim.tick - 1)
+    # scored honestly. The rows land on the last tick the replay carries --
+    # `sim.tick` has already advanced past that frame, and an event outside
+    # `0 .. ticksPlayed` is unreachable by the playhead (r1 review F1).
+    sim.settleEarly()
   sim.finish(reason)
 
   # --- shutdown, in this order ---------------------------------------------

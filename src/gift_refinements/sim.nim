@@ -181,7 +181,10 @@ proc stepRegrow(sim: var SimServer) =
 #  Step 3 -- consume
 # ---------------------------------------------------------------------------
 
-proc bank(sim: var SimServer, slot: int, autobanked: bool) =
+proc bank(sim: var SimServer, slot: int, autobanked: bool, at: int) =
+  ## `at` is the tick the rows are STAMPED with. It is `sim.tick` everywhere
+  ## inside a tick; an early settle passes the last tick the replay actually
+  ## carries, because `step()` advances `sim.tick` past the frame it recorded.
   let
     l0 = sim.cogs[slot].tokens[0]
     l1 = sim.cogs[slot].tokens[1]
@@ -194,16 +197,16 @@ proc bank(sim: var SimServer, slot: int, autobanked: bool) =
   sim.cogs[slot].banked[2] += l2
   sim.cogs[slot].consumedThisTick = true
   if autobanked:
-    sim.emit(autobankEvent(sim.tick, slot, total, sim.cogs[slot].score))
+    sim.emit(autobankEvent(at, slot, total, sim.cogs[slot].score))
     return
   sim.cogs[slot].consumeCd = sim.config.consumeCooldown
-  sim.emit(consumeEvent(sim.tick, slot, l0, l1, l2, sim.cogs[slot].score))
+  sim.emit(consumeEvent(at, slot, l0, l1, l2, sim.cogs[slot].score))
   # A defection is recorded at the till, not at the beam: taking is not a
   # betrayal until you cash it out and walk.
   for other in sim.ledger.defectionsAt(slot):
     sim.defections[slot] += 1
-    sim.emit(defectEvent(sim.tick, slot, other))
-    sim.addBeat(sim.tick, "defect", seat = slot)
+    sim.emit(defectEvent(at, slot, other))
+    sim.addBeat(at, "defect", seat = slot)
 
 proc stepConsume(sim: var SimServer, actions: openArray[Action]) =
   for slot in 0 ..< SeatCount:
@@ -211,7 +214,7 @@ proc stepConsume(sim: var SimServer, actions: openArray[Action]) =
       continue
     if sim.cogs[slot].consumeCd > 0 or sim.cogs[slot].held() == 0:
       continue
-    sim.bank(slot, autobanked = false)
+    sim.bank(slot, autobanked = false, at = sim.tick)
 
 # ---------------------------------------------------------------------------
 #  Step 4 -- gift beams
@@ -367,13 +370,30 @@ proc captureFrame(sim: var SimServer) =
   sim.frames.add(frame)
   sim.pool.add([sim.tick, sim.tokensInPlay()])
 
-proc autobankAll*(sim: var SimServer) =
+proc autobankAll*(sim: var SimServer, at = -1) =
   ## The market closes and everyone cashes out. Counted into `scores` exactly
   ## like a `consume`, so a seat that forgets to bank never scores 0 -- and no
-  ## mid-game trust decision is touched.
+  ## mid-game trust decision is touched. `at` overrides the tick the rows are
+  ## stamped with; see `settleEarly`.
+  let stamp = if at >= 0: at else: sim.tick
   for slot in 0 ..< SeatCount:
     if sim.cogs[slot].held() > 0:
-      sim.bank(slot, autobanked = true)
+      sim.bank(slot, autobanked = true, at = stamp)
+
+proc settleEarly*(sim: var SimServer) =
+  ## An episode that stops before its last scheduled tick (the play deadline,
+  ## or fewer rounds than configured) still settles: everybody cashes out so
+  ## the rounds actually played are scored honestly.
+  ##
+  ## The rows are stamped with the LAST RECORDED FRAME's tick, not `sim.tick`.
+  ## `step()` records the frame and THEN advances `sim.tick`, so a settle after
+  ## the loop that used `sim.tick` would place every `autobank` one tick past
+  ## `frames[^1]` -- an index `parseReplay`'s tick -> events map hands to a
+  ## playhead that can never reach it, so the closing cash-out would draw no
+  ## burst and no feed row and `BroadcastTracker.resync(.., maxTick)` would
+  ## never fold it, while `results.scores` counted it (r1 review F1).
+  let settleTick = if sim.frames.len > 0: sim.frames[^1].tick else: 0
+  sim.autobankAll(at = settleTick)
 
 proc step*(sim: var SimServer, actions: openArray[Action]) =
   ## One tick, steps 1 and 3..7 (step 2, the kernel, is the caller's -- see

@@ -200,4 +200,56 @@ block runeTruncationSurvivesAStrictParser:
     "a string exactly at the cap was truncated anyway")
   banner "multi-byte say/notes truncate on RUNE boundaries and stay strict UTF-8"
 
+block earlySettleStaysInsideTheRecordedFrames:
+  ## The DEADLINE path (r1 review F1). The round loop stops between rounds and
+  ## `settleEarly()` autobanks whatever is still held. `step()` records a frame
+  ## and then advances `sim.tick`, so a settle that stamped `sim.tick` would put
+  ## every closing cash-out one tick PAST the last frame -- a tick the playhead
+  ## can never reach, so the burst, the feed row and the tracker's fold would
+  ## all be lost while `results.scores` still counted the tokens.
+  let short = variantConfig("refinery")
+  let playedRounds = 3
+  var early = initSimServer(short)
+  for round in 1 .. playedRounds:
+    for slot in 0 ..< SeatCount:
+      var order = defaultOrder()
+      order.job = jobCollect
+      order.consume = cwNever          ## nobody banks voluntarily
+      order.source = osScripted
+      early.holdOrder(slot, order)
+    early.runTicks(short.ticksPerRound)
+    early.closeRound()
+  early.settleEarly()
+  early.finish(erDeadline)
+
+  let
+    played = playedRounds * short.ticksPerRound
+    doc = parseReplay(replayBytes(early))
+  check(doc.frames.len == played,
+    "the short episode recorded " & $doc.frames.len & " frames, expected " &
+    $played)
+  var autobanks, bankedByAutobank = 0
+  for event in doc.events:
+    let t = int(event{"t"}.getBiggestInt())
+    check(t >= 0 and t < played,
+      "a " & event{"k"}.getStr() & " event sits at tick " & $t &
+      ", outside the " & $played & " ticks the replay carries")
+    check(doc.eventsAt(t).len > 0, "an event tick is not in the tick index")
+    if event{"k"}.getStr() == "autobank":
+      inc autobanks
+      bankedByAutobank += int(event{"n"}.getBiggestInt())
+  check(autobanks > 0, "the early settle banked nobody")
+  check(bankedByAutobank > 0, "the early settle banked no tokens")
+  check(doc.eventsAt(doc.maxTick()).len > 0,
+    "nothing is indexed on the last tick the deadline replay carries")
+  var scored = 0
+  for score in doc.results{"scores"}:
+    scored += int(score.getBiggestInt())
+  check(scored == bankedByAutobank,
+    "the deadline scores total " & $scored & " but the settle banked " &
+    $bankedByAutobank)
+  check(doc.results{"reason"}.getStr() == "deadline",
+    "the settled episode did not record reason deadline")
+  banner "a deadline settle records its autobank inside 0..ticksPlayed"
+
 echo "test_replay OK"
