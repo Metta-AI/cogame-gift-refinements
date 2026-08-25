@@ -87,7 +87,8 @@ that one starter.
 
 ### The viewer page is DERIVED, not rewritten
 
-`client/replay_broadcast.html` is the starter's page with four documented edits
+`client/replay_broadcast.html` is the starter's page with four documented
+classes of edit — the note licenses three of them; the fourth is delta 9 below —
 and one appended game block. `scripts/derive_broadcast_page.py` is the record of
 exactly which lines were cut — re-run it against a coworld-ctf checkout and it
 either reproduces the file or fails loudly on the line it expected:
@@ -136,7 +137,7 @@ episodes respectively; they run in **release only** in CI, via the repo variable
 ## Where this repo differs from the design note
 
 The design note is the contract. The implementation follows it everywhere
-except the nine readings below, each of which is also recorded at the code or
+except the ten readings below, each of which is also recorded at the code or
 the assertion it affects. Two are threshold changes; the rest are readings of a
 sentence the note leaves open, and none of them changes a rule.
 
@@ -222,7 +223,21 @@ worth knowing: no canvas `fillText` runs in the replay path at all, so
 renderer fixture (`tools/ci/renderer_fixture.html`) is what actually gates drawn
 text.
 
-**9. Two smaller notes, neither a rule change.**
+**9. The page derivation makes a FOURTH class of edit inside the starter's own
+script, where the note licenses three.** `scripts/derive_broadcast_page.py`
+makes the note's removals, its `#lockerroom { pointer-events: none }` and its
+re-lettered literals — four of those, not two: the note names `Lives` → `Tokens`
+and `LIVES LEAD` → `TOKENS IN PLAY`, and the page `<title>` and the locker-room
+caption otherwise still read "Ctf" and "paint". The fourth class is the renamed
+game-block hook (`PaintballChrome`/`PB_CTX` → `GiftRefinementsChrome`/`GR_CTX`)
+and the deletion of the `PB_MODE` latch with its four plate/endcard branches.
+Both follow from the removal the note itself requires: the starter's own
+appended paintball block is cut, and it was the only thing that ever set
+`regime` and therefore the only thing that ever latched `PB_MODE`. Every edit
+is enumerated in the script and re-verifiable — run it against a coworld-ctf
+checkout and it reproduces `client/replay_broadcast.html` byte for byte.
+
+**10. Two smaller notes, neither a rule change.**
 
 * **The seed is inert.** The note pins the RNG to "nothing but the tie-free
   jitter-free bookkeeping", so a scripted episode is a pure function of its

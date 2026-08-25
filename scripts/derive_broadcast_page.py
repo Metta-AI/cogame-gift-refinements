@@ -29,6 +29,24 @@ The page is the starter's, edited only where the design note
      CLASSIC plate and endcard shapes, so the two hooks (frame, event) are
      called unconditionally instead of behind a mode flag.
 
+     THIS IS A FOURTH CLASS OF EDIT AND THE NOTE LICENSES THREE ("The only
+     edits inside the starter's own markup/script are these three, and no
+     others", §Chrome provenance). It is recorded as a delta in README.md
+     rather than hidden. Why it is here at all: cut (4343, 4658) above removes
+     the starter's OWN appended paintball block, which is the only thing that
+     ever set `regime` and therefore the only thing that ever latched PB_MODE.
+     Keeping the latch would leave the page carrying a flag that is false
+     forever plus the four content branches behind it — dead code that reads
+     as a supported mode. The hook names go with the block they call: a page
+     that asks `window.PaintballChrome` for this game's chrome is worse
+     provenance, not better. Note also that class 2 re-letters FOUR literals,
+     not the note's two: the page <title> and the locker-room caption say
+     "Ctf" and "paint" in the starter and would otherwise ship as-is.
+
+  Everything else in the starter's markup and script is untouched, and running
+  this script against a coworld-ctf checkout reproduces client/replay_broadcast.html
+  byte for byte, so the whole claim is re-verifiable rather than asserted.
+
 Everything else -- #stage, #board, #chrome, #scorebug, #plates-l/r, #clock,
 #clock-time, #clock-caption, #bannerlane, #killfeed, #transport and all its
 buttons plus #btn-spoilers, #scrub, #momentum, #scrub-fill, #lulls, #scrub-win,
