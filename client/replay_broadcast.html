@@ -2556,6 +2556,31 @@ button.beat-marker {
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
+
+/* --- the feed's EXPANDED row: the only place `notes` is drawn ------------ */
+/* `say` is the headline; `notes` is the seat's reasoning, up to 320 runes.
+   The row carries the whole string — nothing here shortens it — and shows it
+   on hover or on click, wrapped, under the headline. The inherited feed rows
+   are display-only, so only this kind of row takes pointer events back. */
+.feed-row.gr-order { flex-wrap: wrap; pointer-events: auto; cursor: pointer; }
+.feed-row .gr-more {
+  color: var(--paper-dim);
+  font-size: calc(7.5 * var(--u));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.feed-row .gr-notes { display: none; flex: 1 0 100%; }
+.feed-row.gr-order:hover .gr-notes,
+.feed-row.gr-order.gr-open .gr-notes {
+  display: block;
+  white-space: normal;
+  margin-top: calc(3 * var(--u));
+  font-family: var(--finefont);
+  font-size: calc(7.5 * var(--u));
+  line-height: 1.45;
+  color: var(--paper-dim);
+  overflow-wrap: anywhere;
+}
 </style>
 <script>
 (function () {
@@ -2649,6 +2674,47 @@ button.beat-marker {
     // The starter's pushFeed takes ONE argument. Changing that signature is
     // what broke cogball 0.1.4, so it is called exactly as inherited.
     CTX.pushFeed(row);
+    return row;
+  }
+
+  // The `order` row is the feed's EXPANDED row: the seat's `say` is the
+  // headline and its `notes` — the reasoning, up to 320 runes — is drawn
+  // under it, wrapped, on hover or click. Nothing here shortens either
+  // string; the caps are the server's (sim_types.nim MaxSayRunes /
+  // MaxNotesRunes) and the row carries what it was given.
+  function orderRow(e, s) {
+    var say = e.say || '';
+    var notes = e.notes || '';
+    if (!say && !notes) return null;
+    var html = '<span class="who">' + CTX.esc(upper(alias(s, e.seat))) +
+      '</span>';
+    if (say) {
+      html += '<span class="glyph">:</span>' +
+        '<span class="gr-say">\u201c' + CTX.esc(say) + '\u201d</span>';
+    }
+    if (e.source === 'fallback' || e.source === 'scripted') {
+      html += '<span class="gr-auto">auto</span>';
+    }
+    if (!notes) return feedRow(html);
+    html += '<span class="gr-more">notes</span>' +
+      '<div class="gr-notes">' + CTX.esc(notes) + '</div>';
+    var row = feedRow(html, 'gr-order');
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-expanded', 'false');
+    function toggle(ev) {
+      ev.stopPropagation();
+      row.setAttribute(
+        'aria-expanded', row.classList.toggle('gr-open') ? 'true' : 'false');
+    }
+    row.addEventListener('click', toggle);
+    row.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        toggle(ev);
+      }
+    });
+    return row;
   }
 
   function alias(s, slot) {
@@ -2913,13 +2979,7 @@ button.beat-marker {
           LEVELS[e.lvl] + ' lost</span>');
         return true;
       case 'order':
-        if (e.say) {
-          feedRow('<span class="who">' + CTX.esc(upper(alias(s, e.seat))) +
-            '</span><span class="glyph">:</span>' +
-            '<span class="gr-say">\u201c' + CTX.esc(e.say) + '\u201d</span>' +
-            ((e.source === 'fallback' || e.source === 'scripted')
-              ? '<span class="gr-auto">auto</span>' : ''));
-        }
+        orderRow(e, s);
         return true;
       case 'round':
         buildGiftBeats(s, e.t, 'round', null,

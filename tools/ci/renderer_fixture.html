@@ -58,7 +58,11 @@
   #killfeed { position: absolute; left: calc(8 * var(--u));
               bottom: calc(var(--band) + 8 * var(--u)); width: 46%;
               display: flex; flex-direction: column-reverse; gap: 3px; }
-  .feed-row { background: rgba(12,9,6,0.62); padding: calc(2 * var(--u)) calc(5 * var(--u));
+  /* Mirrors the starter's #killfeed row box (replay_broadcast.html section 2):
+     a flex row, one line, sized to content. The game block's own rules —
+     including the expanded `notes` line — come from client/game_block.html. */
+  .feed-row { display: flex; align-items: center; gap: calc(5 * var(--u));
+              background: rgba(12,9,6,0.62); padding: calc(2 * var(--u)) calc(5 * var(--u));
               font-size: calc(9 * var(--u)); overflow: hidden; white-space: nowrap;
               text-overflow: ellipsis; }
   #bannerlane { position: absolute; top: 40%; left: 0; right: 0; text-align: center; }
@@ -279,6 +283,20 @@
           ' runes, expected ' + SAY_CAP);
       }
     }
+    // `notes` is drawn in the feed's EXPANDED row and nowhere else, so the
+    // fixture opens one: a hidden string measures nothing.
+    var open = document.querySelectorAll('.feed-row.gr-open .gr-notes');
+    if (!open.length) problems.push('no expanded notes row was drawn');
+    for (var n = 0; n < open.length; n++) {
+      var notes = open[n].textContent;
+      if (Array.from(notes).length !== NOTES_CAP) {
+        problems.push('an expanded notes row is ' + Array.from(notes).length +
+          ' runes, expected ' + NOTES_CAP);
+      }
+      if (getComputedStyle(open[n]).display === 'none') {
+        problems.push('the expanded notes row is not displayed');
+      }
+    }
     if (!document.querySelectorAll('.gr-chip').length) {
       problems.push('the roster strip drew no chips');
     }
@@ -352,6 +370,13 @@
           state, CTX);
       }
     });
+
+    // The note draws `notes` "only in the feed's expanded row", so open the
+    // newest one: the worst case for this chrome is a full-cap 320-rune
+    // reasoning block wrapped inside a feed row at 360 px, and a row nobody
+    // expanded measures nothing.
+    var expandable = document.querySelector('.feed-row.gr-order');
+    if (expandable) expandable.click();
 
     var problems = selfCheck(state);
     if (problems.length) {

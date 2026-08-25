@@ -15,7 +15,8 @@
 //
 // This opens the worst-case renderer fixture at 13 viewports down to 360 px
 // and asserts, at each one:
-//   * the feed rows, the trust-graph rows and the roster chips EXIST;
+//   * the feed rows, the feed's EXPANDED `notes` row, the trust-graph rows and
+//     the roster chips EXIST;
 //   * every one of them has its FULL string (nothing was cut server-side or by
 //     a JS slice -- CSS ellipsis is fine, a truncated textContent is not);
 //   * no row overflows its own box (scrollWidth <= clientWidth + 1) UNLESS it
@@ -82,6 +83,7 @@ function loadPlaywright() {
 function measure() {
   const groups = [
     { name: 'feed rows', selector: '.feed-row', minCount: 1 },
+    { name: 'expanded notes', selector: '.feed-row.gr-open .gr-notes', minCount: 1 },
     { name: 'trust rows', selector: '#gr-rows .gr-row', minCount: 1 },
     { name: 'roster chips', selector: '.gr-chip', minCount: 6 },
     { name: 'plate names', selector: '.plate .team-name', minCount: 2 },
@@ -129,6 +131,16 @@ function measure() {
     const runes = Array.from((say.textContent || '').replace(/[\u201c\u201d]/g, ''));
     if (runes.length !== 80) {
       problems.push(`a say row carries ${runes.length} runes, expected the full 80`);
+    }
+  }
+  // `notes` is the other LLM-authored string that reaches the chrome, drawn in
+  // the feed's expanded row. Same rule: full length, in the box it opened into.
+  const notes = Array.from(document.querySelectorAll('.gr-notes'));
+  if (!notes.length) problems.push('no LLM notes row is present');
+  for (const note of notes) {
+    const runes = Array.from(note.textContent || '');
+    if (runes.length !== 320) {
+      problems.push(`a notes row carries ${runes.length} runes, expected the full 320`);
     }
   }
   return { problems, seen };
