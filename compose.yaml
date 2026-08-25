@@ -1,0 +1,19 @@
+# ONE service, ONE image, TWO entrypoints: /bin/gift-refinements (the game
+# server, which owns the whole decision layer) and
+# /bin/gift-refinements-player (the thin seat registrar). The policy set is
+# env-switched inside this same image (PLAYER_PROMPT vs PLAYER_SCRIPTED), which
+# is what keeps a champion and a scripted filler byte-identical apart from
+# their environment.
+#
+# The service NAME is the single source of the manifest's image placeholder:
+# `services.gift_refinements` -> `{{GIFT_REFINEMENTS_IMAGE}}`. `coworld build`
+# hard-fails anything else and `{{GAME_IMAGE}}` is not a thing (lantern,
+# 2026-08-23); tests/test_manifest.nim asserts the derivation.
+services:
+  gift_refinements:
+    image: coworld-gift-refinements:latest
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host

@@ -1,0 +1,598 @@
+<!-- ============================================================
+     GIFT-REFINEMENTS additions to the inherited coworld-ctf chrome
+     ============================================================
+     Everything above this banner is the starter's broadcast page. The only
+     edits made inside it are the ones the design note lists
+     (docs/plans/2026-08-25-gift-refinements-design.md, "## Viewer" ->
+     "Chrome provenance (exact)"), and scripts/derive_broadcast_page.py is the
+     record of exactly which lines they were:
+
+       * REMOVED, with their CSS and the JS branches that touch them:
+         #viewpanel (+ #minimap, #zoombar, #zoom-*), #fpv (+ every #fpv-*),
+         #povBadge, #mmwarn. The 24x14 board is FIXED and always fits the
+         frame, so there is nothing to pan to and nothing a minimap could add;
+         the replay records STATE, so there is no hash to mismatch; and nothing
+         is fogged, so there is no POV lens.
+       * RE-LETTERED: the scorebug's `Lives` label -> `Tokens`, the momentum
+         strip's `LIVES LEAD` -> `TOKENS IN PLAY`, the page title, the
+         locker-room caption.
+       * #lockerroom gains pointer-events: none, so its ~1.5 s curtain stops
+         swallowing transport clicks (ecos, 2026-08-23).
+
+     NOTHING HERE TOUCHES THE TRANSPORT BAND. relayout() still owns
+     --hudscale, --topband and --band on :root; every panel this block adds is
+     clipped to the board region between var(--topband) and var(--band); the
+     endcard still stops at bottom: var(--band, 0px) and is still dismissed by
+     every seek.
+
+     Every scrubber beat this block draws is a LABELLED, CLICKABLE BUTTON that
+     seeks on click, with CSS for EVERY kind the sim emits: round, firstgift,
+     super, defect and gameover. THE BUILDER IS CALLED buildGiftBeats AND
+     NEVER markBeat: the page's chrome alias block declares the shared beat
+     builder with a hoisted `var`, so a game-block `function markBeat` is
+     silently swallowed by it and the scrubber ends up with unlabelled div
+     markers that never seek (cogame-tandem, 2026-08-23).
+     tests/test_broadcast.nim asserts the whole alias list is untouched below
+     this banner.
+     ============================================================ -->
+<style>
+/* --- scorebug: the two headline plates ---------------------------------- */
+/* The plate name must survive a 360px featured-match iframe: it grows into
+   whatever room the plate has and ellipsises only when it genuinely runs out,
+   never collapsing to a bare "…". The classic plate markup names the element
+   .team-name, so both selectors carry the rule. */
+.plate-name,
+.plate .team-name {
+  flex: 1 1 auto;
+  min-width: 3.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Unknown team keys fall back to the starter's AMBER in buildFlag, so nothing
+   breaks if a key is missed; these two just give each total its own ink. */
+.plate.gifts { --tc: #57c98a; }
+.plate.banked { --tc: #e2b23c; }
+.plate .gr-sub {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  margin-top: calc(3 * var(--u));
+  font-family: var(--finefont);
+  font-size: calc(8 * var(--u));
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--paper-dim);
+  white-space: nowrap;
+}
+.plate.side-r .gr-sub { flex-direction: row-reverse; }
+
+/* --- the roster strip, under the scorebug ------------------------------- */
+#gr-roster {
+  position: absolute;
+  top: var(--topband, 0px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: calc(5 * var(--u));
+  padding: calc(3 * var(--u)) calc(6 * var(--u));
+  pointer-events: none;
+  z-index: 12;
+  flex-wrap: nowrap;
+}
+.gr-chip {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  padding: calc(2 * var(--u)) calc(5 * var(--u));
+  background: rgba(12, 9, 6, 0.62);
+  box-shadow: inset 0 0 0 calc(1 * var(--u)) rgba(242, 232, 216, 0.14),
+              inset calc(3 * var(--u)) 0 0 var(--cc, var(--amber));
+  font-family: var(--finefont);
+  font-size: calc(9 * var(--u));
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  min-width: 0;
+}
+.gr-chip .gr-alias {
+  font-family: var(--pixfont);
+  font-size: calc(10 * var(--u));
+  color: var(--cc, var(--paper));
+}
+.gr-chip .gr-pol {
+  color: var(--paper-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(120 * var(--u));
+}
+.gr-chip .gr-score {
+  font-family: var(--pixfont);
+  font-size: calc(11 * var(--u));
+  color: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+.gr-chip .gr-inv { font-family: var(--pixfont); font-size: calc(9 * var(--u)); }
+.gr-chip .gr-inv .l0 { color: #9a9893; }
+.gr-chip .gr-inv .l1 { color: #ce8e3e; }
+.gr-chip .gr-inv .l2 { color: #fff4d6; }
+.gr-chip .gr-recip { color: var(--amber); font-size: calc(8 * var(--u)); }
+/* Under 640px of board the chip degrades to "CYR 203": the policy name, the
+   reciprocity pip and the inventory badge go, the alias and the number stay. */
+#stage.tiny .gr-chip .gr-pol,
+#stage.tiny .gr-chip .gr-recip,
+#stage.tiny .gr-chip .gr-inv,
+#stage.tiny .plate .gr-sub,
+#stage.tiny .plate .lives-label { display: none; }
+
+/* --- the trust graph, right side above the feed ------------------------- */
+#gr-trust {
+  position: absolute;
+  right: calc(8 * var(--u));
+  top: calc(var(--topband, 0px) + 34 * var(--u));
+  bottom: calc(var(--band, 0px) + 96 * var(--u));
+  width: calc(150 * var(--u));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(4 * var(--u));
+  pointer-events: none;
+  z-index: 11;
+}
+#gr-trust .gr-tcap {
+  font-family: var(--finefont);
+  font-size: calc(7.5 * var(--u));
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--paper-dim);
+  text-align: right;
+}
+#gr-hex { width: 100%; height: calc(110 * var(--u)); }
+#gr-rows {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--u));
+  font-family: var(--pixfont);
+  font-size: calc(9 * var(--u));
+  color: var(--paper);
+  text-align: right;
+}
+#gr-rows .gr-row.def { color: var(--red); }
+/* Under 480px the hexagon collapses to its three text rows. */
+#stage.mini #gr-hex { display: none; }
+#stage.mini #gr-trust { width: calc(110 * var(--u)); }
+
+/* --- scrubber beats: one rule per kind the sim emits -------------------- */
+/* Buttons, not divs: each carries a title + aria-label and seeks on click. */
+button.beat-marker {
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  appearance: none;
+  background: var(--paper-dim);
+}
+.beat-marker.round {
+  background: rgba(242, 232, 216, 0.55);
+  width: calc(2 * var(--u));
+  height: calc(8 * var(--u));
+}
+.beat-marker.firstgift {
+  background: #57c98a;
+  width: calc(3 * var(--u));
+  height: calc(12 * var(--u));
+}
+.beat-marker.super {
+  background: #fff4d6;
+  width: calc(3 * var(--u));
+  height: calc(12 * var(--u));
+}
+.beat-marker.defect {
+  background: var(--red);
+  width: calc(3 * var(--u));
+  height: calc(13 * var(--u));
+}
+.beat-marker.gameover {
+  background: var(--amber);
+  width: calc(3 * var(--u));
+  height: calc(14 * var(--u));
+}
+
+/* --- feed rows ---------------------------------------------------------- */
+.feed-row .gr-gift { color: #57c98a; }
+.feed-row .gr-bank { color: var(--amber); letter-spacing: 0.06em; }
+.feed-row .gr-defect { color: var(--red); letter-spacing: 0.06em; }
+.feed-row .gr-spill { color: var(--paper-dim); }
+.feed-row .gr-say { color: var(--paper); font-style: italic; }
+.feed-row .gr-auto {
+  color: var(--paper-dim);
+  font-size: calc(7.5 * var(--u));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+</style>
+<script>
+(function () {
+  'use strict';
+  // Every name in this block is either local to the IIFE or carries a gr-
+  // prefix ON PURPOSE. The page's chrome alias block declares markBeat,
+  // renderClock, pushFeed and friends with hoisted `var`s, and a game-block
+  // function of the same name is silently swallowed by them
+  // (cogame-tandem, 2026-08-23). The beat builder here is buildGiftBeats.
+  var CTX = null;
+  var placedBeats = {};        // "tick|kind|seat" -> true (dedup)
+  var LEVELS = ['raw', 'refined', 'super'];
+  var SVGNS = 'http://www.w3.org/2000/svg';
+
+  // NOT named `$`: every name this block declares is checked against the
+  // page's chrome alias list by tests/test_broadcast.nim, and the list must
+  // come out EMPTY rather than "empty except the ones we decided are fine".
+  function byId(id) { return document.getElementById(id); }
+
+  function scrubGeometry(s) {
+    var st = Math.max(0, s.st || 0);
+    var mx = Math.max(st + 1, s.mx || 1);
+    return { st: st, span: mx - st };
+  }
+
+  // ---- scrubber beats ------------------------------------------------------
+  function buildGiftBeats(s, tick, kind, seat, label) {
+    var key = tick + '|' + kind + '|' + (seat == null ? '' : seat);
+    if (placedBeats[key]) return;
+    placedBeats[key] = true;
+    var scrub = byId('scrub');
+    if (!scrub) return;
+    var g = scrubGeometry(s);
+    var el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'beat-marker ' + kind;
+    el.style.left =
+      (Math.min(1, Math.max(0, (tick - g.st) / g.span)) * 100) + '%';
+    el.title = label;
+    el.setAttribute('aria-label', label);
+    el.__tick = tick;
+    el.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      CTX.send('s:' + tick);
+    });
+    scrub.appendChild(el);
+  }
+
+  // ---- feed ----------------------------------------------------------------
+  function feedRow(html, cls) {
+    var row = document.createElement('div');
+    row.className = 'feed-row' + (cls ? ' ' + cls : '');
+    row.innerHTML = html;
+    // The starter's pushFeed takes ONE argument. Changing that signature is
+    // what broke cogball 0.1.4, so it is called exactly as inherited.
+    CTX.pushFeed(row);
+  }
+
+  function alias(s, slot) {
+    var roster = s.roster || [];
+    for (var i = 0; i < roster.length; i++) {
+      if (roster[i].s === slot) return roster[i].alias || roster[i].name;
+    }
+    return '#' + slot;
+  }
+  function upper(text) { return String(text || '').toUpperCase(); }
+
+  // ---- the appended panels -------------------------------------------------
+  function ensureRoster() {
+    var el = byId('gr-roster');
+    if (el) return el;
+    var chrome = byId('chrome');
+    if (!chrome) return null;
+    el = document.createElement('div');
+    el.id = 'gr-roster';
+    chrome.appendChild(el);
+    return el;
+  }
+
+  function ensureTrust() {
+    var el = byId('gr-trust');
+    if (el) return el;
+    var chrome = byId('chrome');
+    if (!chrome) return null;
+    el = document.createElement('div');
+    el.id = 'gr-trust';
+    el.innerHTML =
+      '<div class="gr-tcap">Trust graph</div>' +
+      '<svg id="gr-hex" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>' +
+      '<div id="gr-rows"></div>';
+    chrome.appendChild(el);
+    return el;
+  }
+
+  function ensurePlateSub(team) {
+    var id = 'gr-sub-' + team;
+    var el = $(id);
+    if (el) return el;
+    var plate = document.querySelector('.plate[data-team="' + team + '"]');
+    if (!plate) return null;
+    var host = plate.querySelector('.team-id') || plate;
+    el = document.createElement('div');
+    el.className = 'gr-sub';
+    el.id = id;
+    host.appendChild(el);
+    return el;
+  }
+
+  // ---- render --------------------------------------------------------------
+  function renderRoster(s) {
+    var host = ensureRoster();
+    if (!host) return;
+    var roster = (s.roster || []).slice().sort(function (a, b) {
+      return (b.score || 0) - (a.score || 0) || a.s - b.s;
+    });
+    var key = roster.map(function (p) {
+      return p.s + ':' + p.score + ':' + p.t0 + ',' + p.t1 + ',' + p.t2 +
+        ':' + p.recip;
+    }).join('|');
+    if (host.__key === key) return;
+    host.__key = key;
+    var html = '';
+    for (var i = 0; i < roster.length; i++) {
+      var p = roster[i];
+      var inv = '';
+      if (p.t0) inv += '<span class="l0">\u25CF' + p.t0 + '</span> ';
+      if (p.t1) inv += '<span class="l1">\u25C6' + p.t1 + '</span> ';
+      if (p.t2) inv += '<span class="l2">\u2726' + p.t2 + '</span>';
+      html += '<span class="gr-chip" style="--cc:' + CTX.esc(p.col || '#e8a33d') + '">' +
+        '<span class="gr-alias">' + CTX.esc(upper(p.alias)) + '</span>' +
+        '<span class="gr-pol">' + CTX.esc(p.pol || '') + '</span>' +
+        '<span class="gr-inv">' + inv + '</span>' +
+        '<span class="gr-recip">\u21C4' + (p.recip || 0) + '%</span>' +
+        '<span class="gr-score">' + (p.score || 0) + '</span>' +
+        '</span>';
+    }
+    host.innerHTML = html;
+  }
+
+  // An edge is GREEN when the two directions are within 2x of each other,
+  // AMBER when one-sided but young, and RED once a defect event has fired on
+  // it. The graph is rebuilt from the events up to the playhead every frame,
+  // so scrubbing back un-draws a defection.
+  function edgeColour(e) {
+    if (e.da || e.db) return '#e0523a';
+    var lo = Math.min(e.ab, e.ba), hi = Math.max(e.ab, e.ba);
+    if (lo > 0 && hi <= lo * 2) return '#57c98a';
+    return '#e8a33d';
+  }
+
+  function renderTrust(s) {
+    var panel = ensureTrust();
+    if (!panel) return;
+    var gr = s.gr || {};
+    var edges = gr.trust || [];
+    var roster = s.roster || [];
+    var key = JSON.stringify(edges);
+    if (panel.__key === key) return;
+    panel.__key = key;
+
+    var svg = byId('gr-hex');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var pts = [];
+    for (var i = 0; i < 6; i++) {
+      var a = Math.PI / 3 * i - Math.PI / 2;
+      pts.push({ x: 50 + Math.cos(a) * 38, y: 50 + Math.sin(a) * 38 });
+    }
+    var heaviest = 1;
+    edges.forEach(function (e) { heaviest = Math.max(heaviest, e.ab + e.ba); });
+    edges.forEach(function (e) {
+      var line = document.createElementNS(SVGNS, 'line');
+      line.setAttribute('x1', pts[e.a].x); line.setAttribute('y1', pts[e.a].y);
+      line.setAttribute('x2', pts[e.b].x); line.setAttribute('y2', pts[e.b].y);
+      line.setAttribute('stroke', edgeColour(e));
+      line.setAttribute('stroke-width',
+        (1 + 4 * ((e.ab + e.ba) / heaviest)).toFixed(2));
+      line.setAttribute('stroke-linecap', 'round');
+      line.setAttribute('opacity', '0.9');
+      svg.appendChild(line);
+    });
+    var defected = {};
+    edges.forEach(function (e) {
+      if (e.da) defected[e.a] = true;
+      if (e.db) defected[e.b] = true;
+    });
+    for (var n = 0; n < 6; n++) {
+      var seat = null;
+      for (var r = 0; r < roster.length; r++) if (roster[r].s === n) seat = roster[r];
+      var dot = document.createElementNS(SVGNS, 'circle');
+      dot.setAttribute('cx', pts[n].x); dot.setAttribute('cy', pts[n].y);
+      dot.setAttribute('r', '6.5');
+      dot.setAttribute('fill', '#1e1711');
+      dot.setAttribute('stroke', (seat && seat.col) || '#f2e8d8');
+      dot.setAttribute('stroke-width', '2');
+      svg.appendChild(dot);
+      var tag = document.createElementNS(SVGNS, 'text');
+      tag.setAttribute('x', pts[n].x); tag.setAttribute('y', pts[n].y + 2.6);
+      tag.setAttribute('text-anchor', 'middle');
+      tag.setAttribute('font-size', '6');
+      tag.setAttribute('fill', '#f2e8d8');
+      tag.textContent = seat ? upper(seat.alias).slice(0, 1) : '?';
+      svg.appendChild(tag);
+      if (defected[n]) {
+        var pip = document.createElementNS(SVGNS, 'text');
+        pip.setAttribute('x', pts[n].x + 7); pip.setAttribute('y', pts[n].y - 5);
+        pip.setAttribute('font-size', '7');
+        pip.setAttribute('fill', '#e0523a');
+        pip.textContent = '\u2620';
+        svg.appendChild(pip);
+      }
+    }
+
+    var rows = edges.slice(0, 3).map(function (e) {
+      var cls = (e.da || e.db) ? 'gr-row def' : 'gr-row';
+      return '<div class="' + cls + '">' +
+        CTX.esc(upper(alias(s, e.a))) + ' \u21C4 ' +
+        CTX.esc(upper(alias(s, e.b))) + '  ' + e.ab + ' \u2194 ' + e.ba +
+        '</div>';
+    }).join('');
+    byId('gr-rows').innerHTML = rows ||
+      '<div class="gr-row">nobody has given anything yet</div>';
+  }
+
+  function renderPlates(s) {
+    var gr = s.gr || {};
+    ['gifts', 'banked'].forEach(function (team) {
+      var sub = ensurePlateSub(team);
+      if (!sub) return;
+      var text = (gr.minted || 0) + ' minted \u00b7 ' +
+        (gr.defections || 0) + ' defection' +
+        ((gr.defections === 1) ? '' : 's');
+      if (sub.textContent !== text) sub.textContent = text;
+    });
+  }
+
+  // The clock reads ROUND 5 / 12 and tick 300 of 720. Spelled out, never "R5".
+  // This runs AFTER the inherited renderClock, which is why it can own both
+  // readouts without touching the shared chrome.
+  function renderRoundClock(s) {
+    var gr = s.gr || {};
+    var timeEl = byId('clock-time'), capEl = byId('clock-caption');
+    if (!timeEl || !capEl) return;
+    var total = (gr.rounds || 12) * (gr.ticksPerRound || 60);
+    if (s.ph === 'gameover') {
+      if (timeEl.textContent !== 'FINAL') timeEl.textContent = 'FINAL';
+      capEl.textContent = 'tick ' + Math.max(0, s.t) + ' of ' + total;
+      return;
+    }
+    var text = 'ROUND ' + (gr.round || 1) + ' / ' + (gr.rounds || 12);
+    if (timeEl.textContent !== text) timeEl.textContent = text;
+    var cap = 'tick ' + Math.max(0, s.t) + ' of ' + total;
+    if (capEl.textContent !== cap) capEl.textContent = cap;
+  }
+
+  function renderEndcardExtras(s) {
+    if (s.ph !== 'gameover' || !s.over) return;
+    var o = s.over;
+    var head = byId('ec-headline'), how = byId('ec-how'), cond = byId('ec-wincond');
+    if (!head) return;
+    head.className = 'headline';
+    head.textContent = o.draw
+      ? 'DEAD EVEN'
+      : upper(o.winner) + ' WINS \u2014 ' + (o.winnerPol || '');
+    if (cond) cond.textContent = o.endingText || '';
+    var rows = (o.scores || []).slice().sort(function (a, b) {
+      return b.score - a.score;
+    }).map(function (r) {
+      return upper(r.alias) + ' ' + r.score;
+    }).join('  \u00b7  ');
+    var collected = 0;
+    (o.collected || []).forEach(function (n) { collected += n; });
+    if (how) {
+      how.textContent = rows + '   \u2014   ' + (o.gifts || 0) + ' gifts \u00b7 ' +
+        (o.minted || 0) + ' tokens minted from ' + collected + ' raw \u00b7 ' +
+        (o.defections || 0) + ' defections';
+    }
+  }
+
+  // ---- events --------------------------------------------------------------
+  // Returns true when the beat was handled here, so the inherited switch never
+  // doubles it.
+  function giftEvent(e, s, ctx) {
+    CTX = ctx;
+    switch (e.k) {
+      case 'gift':
+        feedRow('<span class="who">' + CTX.esc(upper(alias(s, e.from))) +
+          '</span><span class="glyph">\u2192</span><span class="who">' +
+          CTX.esc(upper(alias(s, e.to))) + '</span>' +
+          '<span class="gr-gift">1 ' + LEVELS[e.sent] + ' becomes ' + e.n +
+          ' ' + upper(LEVELS[e.got]) + '</span>');
+        return true;
+      case 'consume':
+      case 'autobank': {
+        var parts = [];
+        if (e.l0) parts.push(e.l0 + ' raw');
+        if (e.l1) parts.push(e.l1 + ' refined');
+        if (e.l2) parts.push(e.l2 + ' super');
+        feedRow('<span class="who">' + CTX.esc(upper(alias(s, e.seat))) +
+          '</span><span class="gr-bank">BANKS ' + e.n +
+          (parts.length ? ' \u2014 ' + parts.join(', ') : '') + '</span>');
+        return true;
+      }
+      case 'defect':
+        buildGiftBeats(s, e.t, 'defect', e.seat,
+          upper(alias(s, e.seat)) + ' took from ' + upper(alias(s, e.on)) +
+          ' and gave nothing back \u2014 click to jump here');
+        feedRow('<span class="gr-defect">' + CTX.esc(upper(alias(s, e.seat))) +
+          ' TOOK FROM ' + CTX.esc(upper(alias(s, e.on))) +
+          ' AND GAVE NOTHING BACK</span>');
+        CTX.banner(upper(alias(s, e.seat)) + ' DEFECTS', 'amb');
+        return true;
+      case 'spill':
+        feedRow('<span class="who">' + CTX.esc(upper(alias(s, e.seat))) +
+          '</span><span class="gr-spill">OVERFLOWS \u2014 ' + e.lost + ' ' +
+          LEVELS[e.lvl] + ' lost</span>');
+        return true;
+      case 'order':
+        if (e.say) {
+          feedRow('<span class="who">' + CTX.esc(upper(alias(s, e.seat))) +
+            '</span><span class="glyph">:</span>' +
+            '<span class="gr-say">\u201c' + CTX.esc(e.say) + '\u201d</span>' +
+            ((e.source === 'fallback' || e.source === 'scripted')
+              ? '<span class="gr-auto">auto</span>' : ''));
+        }
+        return true;
+      case 'round':
+        buildGiftBeats(s, e.t, 'round', null,
+          'Round ' + e.round + ' closes \u2014 click to jump here');
+        CTX.banner('ROUND ' + e.round, 'amb');
+        return true;
+      case 'collect':
+      case 'spawn':
+      case 'giftmiss':
+        return true;              // continuous texture; the BOARD is the readout
+      case 'end':
+        return false;             // the end-card is state-driven
+    }
+    return false;
+  }
+
+  function giftFrame(s, ctx, jumped) {
+    CTX = ctx;
+    if (jumped) placedBeats = {};
+    var stage = byId('stage');
+    if (stage) {
+      // Under 480px the trust hexagon collapses to its three text rows.
+      stage.classList.toggle('mini', (s.boardW || 999) <= 480);
+    }
+    renderPlates(s);
+    renderRoster(s);
+    renderTrust(s);
+    renderRoundClock(s);
+    renderEndcardExtras(s);
+    // The whole beat timeline ships on the FIRST HUD frame (the starter's
+    // `beats` field), so the scrubber is complete before playback starts and
+    // ?spoilers=0 still holds each beat back until the playhead reaches it.
+    // The last beat is `gameover` at the final tick, so the rail's right edge
+    // always reaches the endcard (territory, 2026-08-25).
+    if (s.beats && s.beats.length) {
+      for (var i = 0; i < s.beats.length; i++) {
+        var b = s.beats[i];
+        if (b.k === 'round') {
+          buildGiftBeats(s, b.t, 'round', null,
+            'Round ' + b.n + ' closes \u2014 click to jump here');
+        } else if (b.k === 'firstgift') {
+          buildGiftBeats(s, b.t, 'firstgift', null,
+            'The first gift of the episode \u2014 click to jump here');
+        } else if (b.k === 'super') {
+          buildGiftBeats(s, b.t, 'super', null,
+            'The first SUPER token is minted \u2014 click to jump here');
+        } else if (b.k === 'defect') {
+          buildGiftBeats(s, b.t, 'defect', b.seat,
+            'A cog banks what it was given and returns nothing \u2014 click to jump here');
+        } else if (b.k === 'gameover') {
+          buildGiftBeats(s, b.t, 'gameover', null,
+            'Game over \u2014 click to jump here');
+        }
+      }
+    }
+  }
+
+  window.GiftRefinementsChrome = {
+    install: function (ctx) { CTX = ctx; },
+    frame: giftFrame,
+    event: giftEvent
+  };
+})();
+</script>

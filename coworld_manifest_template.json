@@ -1,0 +1,256 @@
+{
+  "$schema": "https://softmax.com/schemas/coworld-manifest.json",
+  "tags": [
+    "gift-refinements",
+    "trust",
+    "reciprocity",
+    "grid",
+    "llm-driven",
+    "melting-pot",
+    "six-player"
+  ],
+  "episode_timeout_minutes": 20,
+  "game": {
+    "name": "gift-refinements",
+    "owner": "daveey",
+    "description": "Six cogs on a foundry floor. A beam costs you one raw token and hands somebody else three refined ones; consuming pays +1 a token whatever its grade. The only way anything is worth more than it started is to give it away and hope it comes back.",
+    "runnable": {
+      "type": "game",
+      "image": "{{GIFT_REFINEMENTS_IMAGE}}",
+      "run": ["/bin/gift-refinements"],
+      "env": {
+        "ANTHROPIC_API_KEY_URI": "secret://coworld/gift-refinements/anthropic_api_key"
+      },
+      "source_url": "https://github.com/Metta-AI/cogame-gift-refinements/tree/main"
+    },
+    "replay_viewer": {
+      "bundle": "static-replay-viewer"
+    },
+    "docs": {
+      "readme": {
+        "type": "text",
+        "value": "Gift Refinements is the Trust Game made spatial. Six cogs walk a 24 x 14 foundry floor where eighteen seep pads slowly grow raw tokens. Consuming turns EVERY token you hold into +1 point each, whatever its grade, and empties your hands. Gifting is a beam: it spends one token of your LOWEST held level and hands the cog it hits THREE tokens of the next level up (a maxed token passes through as one). So a pair that bounces one raw token back and forth can turn it into nine and split it - but at every single step the holder can simply cash out and walk behind a pillar. Nobody has to give anything. All the upside requires it. There is no talk channel: the only signals a cog can send are a beam and where it chooses to stand."
+      },
+      "pages": [
+        {
+          "id": "rules.md",
+          "title": "Rules",
+          "content": {
+            "type": "text",
+            "value": "THE BOARD. A fixed 24 x 14 grid. A border wall ring (72 cells) and five two-by-two interior pillars (20 cells) are impassable and block beams; 244 cells are passable. Eighteen seep pads are drawn into the floor. A pad holds at most one loose raw token; at tick 0 every pad carries one, and a pad emptied by a collect regrows after 30 ticks.\n\nTOKENS. A token has a level: 0 raw, 1 refined, 2 super. Each cog's inventory is three counters capped at 15 PER LEVEL. Nothing destroys a token but consuming and the cap.\n\nCONSUMING converts EVERY token you hold, at every level, into +1 score each and empties the inventory. Refinement buys nothing at the till; it only multiplies how many tokens exist. Ten ticks between cash-outs.\n\nGIFTING is a beam. It traces cells 1..4 straight out in one cardinal direction, stops at the first wall or pillar, and hits the first cog it finds. The shooter spends one token of its LOWEST held level; if that level is under 2 the target receives THREE of the next level, and if it is 2 the target receives ONE super token. Anything over the target's 15-per-level cap is lost. A beam that finds no cog costs no token, only the cooldown. A cog cannot gift itself or beam through a wall, a pillar or a third cog. Four ticks between one cog's beams; a standing order may schedule at most ten a round.\n\nTHE TICK ORDER, seven steps, seats in ascending slot order within each: 1 regrow, 2 the kernel derives each cog's action, 3 consume, 4 gift beams, 5 collect, 6 move, 7 record. Consuming resolves BEFORE gifting, so a token beamed at you on the same tick lands after your cash-out and survives it.\n\nSCORING. Your score is the number of tokens you have consumed, each worth exactly +1 whatever its level. Higher is better; nothing is ever subtracted. At the last tick of round 12 every cog automatically banks whatever it still holds - the market closes and everyone cashes out.\n\nENDING. One episode is 12 rounds of 60 ticks. It ends at the first of: 12 rounds played (complete / round_limit); the wall-clock play deadline (deadline / deadline), scoring the rounds actually played; or no seat connecting inside 180 s (forfeit / forfeit). A room where nobody ever gifts is a completed game, not an error."
+          }
+        },
+        {
+          "id": "policies.md",
+          "title": "Fielding a policy",
+          "content": {
+            "type": "text",
+            "value": "A POLICY IS A PROMPT. Every seat runs the same image. Set PLAYER_PROMPT to a strategy in plain English and the seat becomes an LLM seat; set PLAYER_SCRIPTED=reciprocator|hoarder and it plays that published baseline. A seat that sets neither plays reciprocator.\n\n  coworld upload-policy <image> --name my-gift-policy \\\n    --run /bin/gift-refinements-player \\\n    --secret-env PLAYER_PROMPT=\"<your strategy>\" \\\n    --secret-env USE_BEDROCK=true\n\nTHE CADENCE. You do not steer tick by tick. Once per round (60 ticks) the game sends your seat the observation below and asks for ONE standing order; a deterministic kernel walks and beams it for you for the next 60 ticks. All six seats are asked at the same moment, in one parallel batch.\n\nTHE ORDER, one JSON object whose first character is {:\n  job      \"collect\" | \"meet\" | \"hold\" | \"evade\"   (required)\n  target   one of the five OTHER cog aliases, or null; required when job is\n           \"meet\" or gift > 0\n  gift     integer 0..10, beams to fire at target this round (absent = 0;\n           out of range is clamped and the order records clamped: true)\n  consume  \"now\" | \"end\" | \"never\"   (absent = \"end\")\n  say      <= 80 characters. SPECTATOR-ONLY: it is drawn in the viewer feed\n           and recorded in the replay, and is NEVER delivered to another seat.\n  notes    <= 320 characters, private to you, handed back next round.\nAnything else is ignored. A reply that is unparseable, names an unknown job or\nalias, targets itself, or omits a required target is retried once and then the\nseat plays the reciprocator order for that round.\n\nTHE OBSERVATION. Your cell, your three token counts, your lowest held level,\nyour score, your beam budget and your last order; for EVERY other cog its\nalias, cell, distance, whether it is hittable right now and in which\ndirection, its score, the running youGave / gaveYou / net counts between you\nand it, the round it last gave to you and what it banked last round; every\nloose raw token; the global gift ledger (last 16 gifts) and bank tape (last 8\nconsumes); your own per-round history; your notes; and the full rule block.\nHIDDEN: every other cog's INVENTORY, its order, its notes, its prompt and its\npolicy name. You know what somebody banked. You do not know what they are\nholding."
+          }
+        }
+      ]
+    },
+    "protocols": {
+      "player": {
+        "type": "text",
+        "value": "gift-refinements.player.v1, JSON text frames over ws://<host>/player?slot=N&token=T.\n\nGAME -> PLAYER\n  {\"type\":\"welcome\",\"protocol\":\"gift-refinements.player.v1\",\"slot\":N,\"name\":\"Cyr\",\"rounds\":12,\"ticksPerRound\":60,\"variant\":\"refinery\",\"aliases\":[\"Aro\",\"Bex\",\"Cyr\",\"Dov\",\"Eno\",\"Fay\"]} on connect.\n  {\"type\":\"state\", ...} at every round boundary: slot, name, round/rounds/roundsLeft, tick, board, you{cell,tokens{raw,refined,super},held,rawestLevel,score,beamsPerRound,lastOrder}, cogs[] (alias, slot, cell, dist, hittable, dir, score, youGave, gaveYou, net, lastGaveYouRound, bankedLastRound - never an inventory), loose[], ledger[] (last 16 gifts), banks[] (last 8 consumes), history[], notes, rules{}.\n  {\"type\":\"final\",\"done\":true,\"slot\":N,\"scores\":[...6...],\"names\":[...aliases...],\"rounds\":R,\"reason\":...,\"ending\":...} at the end, after which the player exits 0.\n\nPLAYER -> GAME\n  {\"type\":\"prompt\",\"prompt\":\"<= 4000 chars\",\"scripted\":\"reciprocator|hoarder|\"} sent immediately on connect, again after welcome, and re-sent every 2 s for up to 10 s until the game acknowledges it (the slot-admission race). Any other frame is ignored with a log line.\n\nThe reply schema the game asks the model for is documented on the \"Fielding a policy\" page. NOTE: `say` is SPECTATOR-ONLY and never reaches another seat - there is no talk channel in this world."
+      },
+      "global": {
+        "type": "text",
+        "value": "Live spectating is the Sprite v1 binary protocol over ws://<host>/global: layer/viewport/sprite/object messages for the board, plus the broadcast chrome JSON smuggled as the LABEL of the reserved 1x1 sprite id 4090 (scorebug, roster, trust graph, beats, tokens-in-play series, endcard). GET /client/global serves the browser client for it.\n\nReplays are a STATIC file plus a browser wasm viewer, never a pod. The manifest declares replay_viewer.bundle = static-replay-viewer; the bundle is opened as index.html?replay=<url of the .replay file> and contacts no server but S3. The replay itself is one strict-UTF-8 JSON document, protocol gift-refinements.replay.v1, carrying the aliases, the policy names, the body colours, the whole board geometry, every rule constant, the seed, one state frame per tick, the pad bitmap, the tokens-in-play series, the beat timeline, every event and the final results."
+      }
+    },
+    "config_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens"],
+      "properties": {
+        "tokens": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1,
+          "maxItems": 6,
+          "description": "Per-seat join tokens, supplied by the runner."
+        },
+        "players": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "additionalProperties": true
+          },
+          "description": "Per-seat policy names, indexed by slot."
+        },
+        "num_agents": {"type": "integer", "minimum": 1, "maximum": 6, "default": 6},
+        "seed": {"type": "integer", "minimum": 0, "default": 0},
+        "variant": {"type": "string", "default": "refinery"},
+        "rounds": {"type": "integer", "minimum": 1, "maximum": 24, "default": 12},
+        "ticksPerRound": {"type": "integer", "minimum": 10, "maximum": 120, "default": 60},
+        "pillars": {"type": "integer", "minimum": 0, "maximum": 5, "default": 5},
+        "spawnTicks": {"type": "integer", "minimum": 5, "maximum": 240, "default": 30},
+        "beamRange": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4},
+        "giftCooldown": {"type": "integer", "minimum": 1, "maximum": 30, "default": 4},
+        "maxBeamsPerRound": {"type": "integer", "minimum": 0, "maximum": 30, "default": 10},
+        "giftMultiplier": {"type": "integer", "minimum": 1, "maximum": 6, "default": 3},
+        "maxLevel": {"type": "integer", "minimum": 1, "maximum": 4, "default": 2},
+        "invCap": {"type": "integer", "minimum": 1, "maximum": 64, "default": 15},
+        "collectCooldown": {"type": "integer", "minimum": 1, "maximum": 30, "default": 3},
+        "moveCooldown": {"type": "integer", "minimum": 1, "maximum": 8, "default": 2},
+        "consumeCooldown": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10},
+        "attempt1Ms": {"type": "integer", "minimum": 5000, "maximum": 60000, "default": 20000},
+        "retryMs": {"type": "integer", "minimum": 1000, "maximum": 60000, "default": 12000},
+        "turnBudgetMs": {"type": "integer", "minimum": 6000, "maximum": 120000, "default": 34000},
+        "minTurnSeconds": {"type": "integer", "minimum": 0, "maximum": 60, "default": 25},
+        "maxOutputTokens": {"type": "integer", "minimum": 200, "maximum": 2000, "default": 1000},
+        "model": {"type": "string", "default": ""},
+        "episodeTimeoutSeconds": {"type": "integer", "minimum": 60, "maximum": 3600, "default": 1200},
+        "playerConnectTimeoutSeconds": {"type": "integer", "minimum": 5, "maximum": 600, "default": 180},
+        "shutdownGraceSeconds": {"type": "integer", "minimum": 0, "maximum": 120, "default": 20},
+        "showPlayerLabels": {"type": "boolean", "default": true}
+      }
+    },
+    "results_schema": {
+      "type": "object",
+      "properties": {
+        "names": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 6},
+        "aliases": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 6},
+        "scores": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "win": {"type": "array", "items": {"type": "boolean"}, "minItems": 1, "maxItems": 6},
+        "collected": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "gifts_sent": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "gifts_received": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "tokens_given": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "tokens_received": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "banked_raw": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "banked_refined": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "banked_super": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "defections": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "reciprocity_x100": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 6},
+        "total_gifts": {"type": "integer"},
+        "total_minted": {"type": "integer"},
+        "rounds": {"type": "integer"},
+        "reason": {"type": "string", "enum": ["complete", "deadline", "forfeit"]},
+        "ending": {"type": "string", "enum": ["round_limit", "deadline", "forfeit"]}
+      },
+      "required": ["names", "scores", "reason", "ending"]
+    }
+  },
+  "player": [
+    {
+      "id": "gift-refinements-player",
+      "type": "player",
+      "name": "Gift Refinements policy seat",
+      "description": "A prompt policy. PLAYER_PROMPT is supplied at upload time; with none set the seat plays the reciprocator baseline.",
+      "image": "{{GIFT_REFINEMENTS_IMAGE}}",
+      "run": ["/bin/gift-refinements-player"]
+    },
+    {
+      "id": "gift-refinements-reciprocator",
+      "type": "player",
+      "name": "Reciprocator baseline",
+      "description": "The always-return bot: finds the cog most in credit with it and beams back what it was sent, plus one.",
+      "image": "{{GIFT_REFINEMENTS_IMAGE}}",
+      "run": ["/bin/gift-refinements-player"],
+      "env": {"PLAYER_SCRIPTED": "reciprocator"}
+    },
+    {
+      "id": "gift-refinements-hoarder",
+      "type": "player",
+      "name": "Hoarder baseline",
+      "description": "The never-gift bot: collects, banks, and walks away from everyone.",
+      "image": "{{GIFT_REFINEMENTS_IMAGE}}",
+      "run": ["/bin/gift-refinements-player"],
+      "env": {"PLAYER_SCRIPTED": "hoarder"}
+    }
+  ],
+  "variants": [
+    {
+      "id": "refinery",
+      "name": "Refinery (default)",
+      "description": "The balanced floor: five pillars, pads regrowing every 30 ticks, beams reaching four cells. The configuration the feasibility oracle gates against and the one where reading the trust graph beats hoarding.",
+      "game_config": {
+        "num_agents": 6,
+        "variant": "refinery",
+        "rounds": 12,
+        "ticksPerRound": 60,
+        "players": [
+          {"name": "Aro"}, {"name": "Bex"}, {"name": "Cyr"},
+          {"name": "Dov"}, {"name": "Eno"}, {"name": "Fay"}
+        ]
+      }
+    },
+    {
+      "id": "scarce",
+      "name": "Scarce seams",
+      "description": "Raw is rare - a pad takes 75 ticks to regrow - so a refining chain is worth far more than a pick-up.",
+      "game_config": {
+        "num_agents": 6,
+        "variant": "scarce",
+        "rounds": 12,
+        "ticksPerRound": 60,
+        "spawnTicks": 75,
+        "players": [
+          {"name": "Aro"}, {"name": "Bex"}, {"name": "Cyr"},
+          {"name": "Dov"}, {"name": "Eno"}, {"name": "Fay"}
+        ]
+      }
+    },
+    {
+      "id": "long-beam",
+      "name": "Long beams",
+      "description": "Beams reach eight cells: reciprocating at distance is easy and walking away from a partner is hard.",
+      "game_config": {
+        "num_agents": 6,
+        "variant": "long-beam",
+        "rounds": 12,
+        "ticksPerRound": 60,
+        "beamRange": 8,
+        "players": [
+          {"name": "Aro"}, {"name": "Bex"}, {"name": "Cyr"},
+          {"name": "Dov"}, {"name": "Eno"}, {"name": "Fay"}
+        ]
+      }
+    },
+    {
+      "id": "open-floor",
+      "name": "Open floor",
+      "description": "The five pillars are gone. There is no cover, so every cog is always hittable from somewhere and 'consume and walk away' costs a great deal more.",
+      "game_config": {
+        "num_agents": 6,
+        "variant": "open-floor",
+        "rounds": 12,
+        "ticksPerRound": 60,
+        "pillars": 0,
+        "players": [
+          {"name": "Aro"}, {"name": "Bex"}, {"name": "Cyr"},
+          {"name": "Dov"}, {"name": "Eno"}, {"name": "Fay"}
+        ]
+      }
+    }
+  ],
+  "certification": {
+    "game_config": {
+      "num_agents": 6,
+      "seed": 7,
+      "variant": "refinery",
+      "rounds": 6,
+      "ticksPerRound": 60,
+      "minTurnSeconds": 0,
+      "playerConnectTimeoutSeconds": 180,
+      "players": [
+        {"name": "Aro"}, {"name": "Bex"}, {"name": "Cyr"},
+        {"name": "Dov"}, {"name": "Eno"}, {"name": "Fay"}
+      ]
+    },
+    "players": [
+      {"player_id": "gift-refinements-player"},
+      {"player_id": "gift-refinements-player"},
+      {"player_id": "gift-refinements-reciprocator"},
+      {"player_id": "gift-refinements-reciprocator"},
+      {"player_id": "gift-refinements-hoarder"},
+      {"player_id": "gift-refinements-hoarder"}
+    ]
+  }
+}

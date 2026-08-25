@@ -1,0 +1,12 @@
+nim.cfg
+nimcache
+*.exe
+*.out
+out/
+tmp/
+build/
+dist/
+replay-viewer/dist/
+__pycache__/
+*.pyc
+.DS_Store

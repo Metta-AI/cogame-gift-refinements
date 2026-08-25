@@ -1,0 +1,10 @@
+.git
+.DS_Store
+nim.cfg
+nimcache
+out
+tmp
+build
+dist
+replay-viewer/dist
+*.tmp

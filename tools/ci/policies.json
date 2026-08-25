@@ -1,0 +1,33 @@
+[
+  {
+    "name": "gift-refinements-mirror",
+    "run": "/bin/gift-refinements-player",
+    "env": {
+      "USE_BEDROCK": "true",
+      "PLAYER_PROMPT": "You play strict, generous tit-for-tat. Open round one by collecting two raw tokens and beaming ONE of them to the nearest cog - one, not more, and remember who it was. From then on your rule is simple: for each cog, return exactly as many beams as it sent you last round, and one extra beam every third round to keep the chain growing. Never send a second gift to a cog that has taken from you and returned nothing for two full rounds; walk away from it and open with someone else instead. Watch your lowest level: while you hold raw tokens every beam you fire sends raw, so if you are sitting on refined stock and want to send it back, stop collecting and spend or bank your raw first. Bank only when you are holding more than ten tokens or when there are two rounds left; a token in your hands can still be trebled, a token in the bank cannot."
+    }
+  },
+  {
+    "name": "gift-refinements-patron",
+    "run": "/bin/gift-refinements-player",
+    "env": {
+      "USE_BEDROCK": "true",
+      "PLAYER_PROMPT": "You are a patron: you build one deep refining chain and defend it. In the first two rounds probe by sending a single raw token to two different cogs and note who returns anything at all. Then pick the ONE cog with the best return and commit - meet it every round, feed it every raw token you collect, and let it feed you refined stock; a pair that keeps one token moving turns it into nine, and nine split is better than one hoarded. Never split your beams across three partners; a half-fed chain mints nothing. If your partner takes two rounds in a row without returning, cut it off permanently, say so, and adopt the cog with the highest net given to you. Hold your super tokens until the last two rounds and then spend beams returning half of them - the close banks whatever is left, so the only tokens you waste are the ones you never minted."
+    },
+    "player": "ply_bac48eb1-662e-44f8-973d-f3e016dccf5d"
+  },
+  {
+    "name": "gift-refinements-reciprocator",
+    "run": "/bin/gift-refinements-player",
+    "env": {
+      "PLAYER_SCRIPTED": "reciprocator"
+    }
+  },
+  {
+    "name": "gift-refinements-hoarder",
+    "run": "/bin/gift-refinements-player",
+    "env": {
+      "PLAYER_SCRIPTED": "hoarder"
+    }
+  }
+]

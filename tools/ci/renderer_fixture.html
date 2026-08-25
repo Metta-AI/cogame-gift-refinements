@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en" data-fixture="renderer">
+<head>
+<meta charset="utf-8">
+<title>Gift Refinements — worst-case renderer fixture</title>
+<!--
+  WHY THIS FILE EXISTS (cogchemists, 2026-08-24)
+  ----------------------------------------------
+  `tools/ci/docker_smoke.sh` runs with NO ANTHROPIC_API_KEY, so every seat
+  plays the scripted baseline — and a scripted baseline emits a one-line `say`
+  and no `notes` at all. EVERY REPLAY CI PRODUCES THEREFORE CARRIES ALMOST NO
+  LLM TEXT, which means nothing that plays a replay can exercise the chrome
+  that draws it. A viewer can be green on the smoke replay and still clip,
+  overflow or draw off-canvas the moment a real champion says something at the
+  cap.
+
+  This fixture is the worst case, built by hand:
+    * a full-cap 80-rune `say` on EVERY seat, in multi-byte runes;
+    * a full-cap 320-rune `notes`;
+    * the longest policy names the platform can produce;
+    * a full inventory badge (15 / 15 / 15) on every cog;
+    * a beam in flight;
+    * a saturated trust graph with a defection on it;
+  rendered through the REAL chrome — `client/chrome_common.js` and the real
+  appended game block out of `client/game_block.html`, fetched and injected
+  rather than re-typed — at several canvas sizes, and it self-checks its own
+  string lengths before signalling.
+
+  It signals exactly like the replay bundle: `data-replay-loaded="true"` on
+  <html> when it has drawn, `data-replay-error="<message>"` if anything failed.
+  `tools/ci/viewer_smoke.mjs --url … --strict-text-bounds` reads the first and
+  `tools/ci/dom_text_smoke.mjs` measures the DOM it leaves behind.
+-->
+<style>
+  :root { --hudscale: 1; --u: calc(1px * var(--hudscale)); --band: 64px; --topband: 56px;
+          --paper: #f2e8d8; --paper-dim: #8a7f72; --amber: #e8a33d; --red: #e0523a;
+          --stage-lo: #16110d; --pixfont: monospace; --finefont: system-ui, sans-serif; }
+  body { margin: 0; background: #16110d; color: var(--paper); font-family: var(--finefont); }
+  #viewport { position: relative; }
+  #stage { position: relative; margin: 0 auto; background: #241a12; }
+  #board { display: block; width: 100%; height: 100%; }
+  #chrome { position: absolute; inset: 0; pointer-events: none; }
+  #scorebug { position: absolute; top: 0; left: 0; right: 0; display: flex;
+              align-items: flex-start; justify-content: space-between; gap: 8px;
+              padding: calc(4 * var(--u)); }
+  .plates { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 0; }
+  .plate { display: flex; align-items: center; gap: calc(6 * var(--u));
+           padding: calc(3 * var(--u)) calc(6 * var(--u));
+           background: rgba(12,9,6,0.6); min-width: 0; }
+  .plate .team-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+  .lives-line { display: flex; align-items: center; gap: calc(6 * var(--u)); min-width: 0; }
+  .lives-label { font-size: calc(8 * var(--u)); color: var(--paper-dim);
+                 text-transform: uppercase; letter-spacing: 0.1em; }
+  .lives-num { font-family: var(--pixfont); font-size: calc(14 * var(--u)); }
+  .clock-col { text-align: center; }
+  .clock .time { font-family: var(--pixfont); font-size: calc(15 * var(--u)); }
+  .clock .caption { font-size: calc(8 * var(--u)); color: var(--paper-dim); }
+  #killfeed { position: absolute; left: calc(8 * var(--u));
+              bottom: calc(var(--band) + 8 * var(--u)); width: 46%;
+              display: flex; flex-direction: column-reverse; gap: 3px; }
+  .feed-row { background: rgba(12,9,6,0.62); padding: calc(2 * var(--u)) calc(5 * var(--u));
+              font-size: calc(9 * var(--u)); overflow: hidden; white-space: nowrap;
+              text-overflow: ellipsis; }
+  #bannerlane { position: absolute; top: 40%; left: 0; right: 0; text-align: center; }
+  #transport { position: absolute; left: 0; right: 0; bottom: 0; height: var(--band); }
+  #scrub { position: relative; height: calc(14 * var(--u)); margin: calc(6 * var(--u)); background: rgba(0,0,0,0.3); }
+  #endcard { position: absolute; inset: var(--topband) 0 var(--band) 0; display: none; }
+  .who { color: var(--paper); }
+  .glyph { color: var(--paper-dim); padding: 0 3px; }
+</style>
+</head>
+<body>
+<div id="viewport">
+  <div id="stage">
+    <canvas id="board"></canvas>
+    <div id="chrome">
+      <div id="scorebug">
+        <div class="plates" id="plates-l"></div>
+        <div class="clock-col">
+          <div class="clock" id="clock">
+            <div class="time" id="clock-time">0:00</div>
+            <div class="caption" id="clock-caption">In the locker room</div>
+          </div>
+        </div>
+        <div class="plates" id="plates-r"></div>
+      </div>
+      <div id="bannerlane"></div>
+      <div id="killfeed"></div>
+      <div id="transport"><div id="scrub"></div></div>
+      <div id="endcard">
+        <div class="headline" id="ec-headline">—</div>
+        <div class="wincond" id="ec-wincond"></div>
+        <div class="how" id="ec-how"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  var SAY_CAP = 80, NOTES_CAP = 320;
+  // Multi-byte runes on purpose: a byte-truncating writer would show up as a
+  // string that is the right BYTE length and the wrong rune length.
+  function runes(text, count) {
+    var out = '';
+    while (Array.from(out).length < count) out += text;
+    return Array.from(out).slice(0, count).join('');
+  }
+  var WORST_SAY = runes('三つの精錬をアロに返す・', SAY_CAP);
+  var WORST_NOTES = runes('アロは第3ラウンドと第4ラウンドで3/3を返した。連鎖を維持する。', NOTES_CAP);
+  var WORST_POLICY = 'gift-refinements-patron-with-an-unreasonably-long-name';
+  var ALIASES = ['Aro', 'Bex', 'Cyr', 'Dov', 'Eno', 'Fay'];
+  var COLOURS = ['#e0523a', '#e08a3a', '#ddc531', '#8ac93a', '#3f7cc4', '#d45a9c'];
+
+  function fail(message) {
+    document.documentElement.setAttribute('data-replay-error', String(message));
+    console.error(message);
+  }
+
+  function frame(tick, over) {
+    var roster = [];
+    for (var i = 0; i < 6; i++) {
+      roster.push({
+        s: i, team: '', name: ALIASES[i], alias: ALIASES[i],
+        pol: i % 2 ? WORST_POLICY : 'gift-refinements-mirror',
+        col: COLOURS[i], alive: true, lives: 0,
+        score: 210 - i * 17, t0: 15, t1: 15, t2: 15,
+        sent: 60 - i, recv: 70 - i, def: i === 1 ? 2 : 0,
+        recip: 38 + i
+      });
+    }
+    var trust = [];
+    for (var a = 0; a < 6; a++) {
+      for (var b = a + 1; b < 6; b++) {
+        trust.push({ a: a, b: b, ab: 60 - a * 4 - b, ba: 55 - b * 3,
+                     da: (a === 1), db: (b === 1) });
+      }
+    }
+    trust.sort(function (p, q) { return (q.ab + q.ba) - (p.ab + p.ba); });
+    var state = {
+      t: tick, mt: 720, ph: over ? 'gameover' : 'playing', lob: 0, pl: true,
+      sp: 1, mx: 719, st: 0, lp: false, sk: false, ff: false, en: true,
+      mm: -1, bs: 1, pov: -1, boardW: document.getElementById('stage').clientWidth,
+      teams: {
+        gifts: { policies: ['GIFTS GIVEN'], lives: 210, minted: 486, def: 4 },
+        banked: { policies: ['TOKENS BANKED'], lives: 826, minted: 486, def: 4 }
+      },
+      roster: roster,
+      events: [],
+      gr: {
+        round: 5, rounds: 12, ticksPerRound: 60, variant: 'refinery',
+        minted: 486, gifts: 210, banked: 826, defections: 4, invCap: 15,
+        trust: trust
+      },
+      beats: [
+        { t: 60, k: 'round', n: 1 }, { t: 97, k: 'firstgift' },
+        { t: 214, k: 'super' }, { t: 455, k: 'defect', seat: 1 },
+        { t: 719, k: 'gameover' }
+      ]
+    };
+    if (over) {
+      state.over = {
+        winner: 'Cyr', winnerPol: WORST_POLICY, draw: false, timeLimit: false,
+        reason: 'complete', ending: 'round_limit', endingText: 'ROUND LIMIT',
+        gifts: 210, minted: 486, banked: 826, defections: 4,
+        collected: [41, 63, 38, 44, 46, 61],
+        scores: roster.map(function (p) {
+          return { alias: p.alias, pol: p.pol, score: p.score };
+        })
+      };
+    }
+    return state;
+  }
+
+  // A minimal stand-in for the classic page's plate machinery, so the game
+  // block has the DOM it expects. The CONTENTS are the block's job.
+  function ensurePlates(state) {
+    ['banked', 'gifts'].forEach(function (team, index) {
+      if (document.getElementById('name-' + team)) return;
+      var plate = document.createElement('div');
+      plate.className = 'plate ' + team + ' ' + (index % 2 === 0 ? 'side-l' : 'side-r');
+      plate.setAttribute('data-team', team);
+      plate.innerHTML =
+        '<div class="team-id"><div class="lives-line">' +
+        '<span class="team-name" id="name-' + team + '"></span>' +
+        '<span class="lives-label">Tokens</span>' +
+        '<span class="lives-num" id="lives-' + team + '"></span>' +
+        '</div></div>';
+      document.getElementById(index % 2 === 0 ? 'plates-l' : 'plates-r')
+        .appendChild(plate);
+    });
+    ['banked', 'gifts'].forEach(function (team) {
+      document.getElementById('name-' + team).textContent =
+        state.teams[team].policies[0];
+      document.getElementById('lives-' + team).textContent =
+        state.teams[team].lives;
+    });
+  }
+
+  var feedEl = document.getElementById('killfeed');
+  var CTX = {
+    esc: function (t) {
+      return String(t).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    },
+    send: function () {},
+    banner: function (text) {
+      document.getElementById('bannerlane').textContent = text;
+    },
+    pushFeed: function (row) {
+      // The starter's ONE-argument signature, and the same insert order.
+      feedEl.insertBefore(row, feedEl.firstChild);
+      while (feedEl.children.length > 4) feedEl.removeChild(feedEl.lastChild);
+    },
+    getState: function () { return null; }
+  };
+
+  // The board canvas. The Nim renderer (src/gift_refinements/global.nim) is the
+  // source of these anchors: an alias plate is centred under the cog's feet and
+  // the inventory badge sits above its head. Mirroring them here is what lets
+  // --strict-text-bounds see a caption that has nowhere to go.
+  var CELL = 48, COLS = 24, ROWS = 14, COG = 44;
+  function drawBoard(width, height) {
+    var canvas = document.getElementById('board');
+    canvas.width = COLS * CELL;
+    canvas.height = ROWS * CELL;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#241a12';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '13px monospace';
+    ctx.textAlign = 'center';
+    var cells = [[2, 2], [21, 2], [2, 11], [21, 11], [2, 6], [21, 7]];
+    for (var i = 0; i < 6; i++) {
+      var px = cells[i][0] * CELL, py = cells[i][1] * CELL;
+      ctx.fillStyle = COLOURS[i];
+      ctx.fillRect(px + (CELL - COG) / 2, py + (CELL - COG) / 2, COG, COG);
+      // alias plate, under the feet
+      ctx.fillStyle = '#f2e8d8';
+      ctx.fillText(ALIASES[i].toUpperCase(), px + CELL / 2, py + CELL - 2);
+      // full inventory badge, above the head
+      ctx.fillText('\u25CF15 \u25C616 \u272615', px + CELL / 2, py - 4);
+    }
+    // a beam in flight, giver to receiver, with three tokens on it
+    ctx.strokeStyle = '#f2e8d8';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(2 * CELL + CELL / 2, 6 * CELL + CELL / 2);
+    ctx.lineTo(6 * CELL + CELL / 2, 6 * CELL + CELL / 2);
+    ctx.stroke();
+    for (var t = 0; t < 3; t++) {
+      ctx.fillStyle = '#ce8e3e';
+      ctx.beginPath();
+      ctx.arc((3 + t) * CELL + CELL / 2, 6 * CELL + CELL / 2, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function sizeStage(width) {
+    var stage = document.getElementById('stage');
+    var height = Math.round(width * (ROWS * CELL) / (COLS * CELL)) + 120;
+    stage.style.width = width + 'px';
+    stage.style.height = height + 'px';
+    document.documentElement.style.setProperty(
+      '--hudscale', Math.max(0.5, Math.min(1.6, width / 760)).toFixed(3));
+    stage.classList.toggle('tiny', width <= 620);
+    drawBoard(width, height);
+  }
+
+  function selfCheck(state) {
+    var problems = [];
+    var says = document.querySelectorAll('.gr-say');
+    if (!says.length) problems.push('no LLM say row was drawn');
+    for (var i = 0; i < says.length; i++) {
+      var text = says[i].textContent.replace(/[\u201c\u201d]/g, '');
+      if (Array.from(text).length !== SAY_CAP) {
+        problems.push('a say row is ' + Array.from(text).length +
+          ' runes, expected ' + SAY_CAP);
+      }
+    }
+    if (!document.querySelectorAll('.gr-chip').length) {
+      problems.push('the roster strip drew no chips');
+    }
+    if (!document.querySelectorAll('#gr-rows .gr-row').length) {
+      problems.push('the trust graph drew no text rows');
+    }
+    if (document.getElementById('clock-time').textContent.indexOf('ROUND') < 0) {
+      problems.push('the clock does not read ROUND n / m');
+    }
+    return problems;
+  }
+
+  function boot(blockHtml) {
+    // Inject the REAL appended game block: its <style> and its <script>, out of
+    // client/game_block.html. Re-typing it here would be a second
+    // implementation and would stop being evidence the moment it drifted.
+    var holder = document.createElement('div');
+    holder.innerHTML = blockHtml;
+    var styles = holder.querySelectorAll('style');
+    for (var i = 0; i < styles.length; i++) document.head.appendChild(styles[i]);
+    var scripts = holder.querySelectorAll('script');
+    for (var j = 0; j < scripts.length; j++) {
+      var live = document.createElement('script');
+      live.textContent = scripts[j].textContent;
+      document.body.appendChild(live);
+    }
+    if (!window.GiftRefinementsChrome) {
+      fail('client/game_block.html did not install GiftRefinementsChrome');
+      return;
+    }
+    window.GiftRefinementsChrome.install(CTX);
+
+    // Several canvas sizes, smallest last so the DOM smoke measures the
+    // hardest one. 360 px is the featured-match iframe.
+    var widths = [1280, 960, 760, 640, 480, 360];
+    var state = null;
+    widths.forEach(function (width) {
+      sizeStage(width);
+      state = frame(300, false);
+      ensurePlates(state);
+      window.GiftRefinementsChrome.frame(state, CTX, true);
+      // Every feed row kind, with the worst-case strings on every seat.
+      for (var seat = 0; seat < 6; seat++) {
+        window.GiftRefinementsChrome.event(
+          { k: 'order', t: 300, seat: seat, round: 5, say: WORST_SAY,
+            notes: WORST_NOTES, source: seat === 5 ? 'fallback' : 'llm' },
+          state, CTX);
+      }
+      window.GiftRefinementsChrome.event(
+        { k: 'gift', t: 300, from: 0, to: 2, sent: 0, got: 1, n: 3 }, state, CTX);
+      window.GiftRefinementsChrome.event(
+        { k: 'consume', t: 300, seat: 1, n: 7, l0: 3, l1: 4, l2: 0 }, state, CTX);
+      window.GiftRefinementsChrome.event(
+        { k: 'defect', t: 300, seat: 1, on: 3 }, state, CTX);
+      window.GiftRefinementsChrome.event(
+        { k: 'spill', t: 300, seat: 2, lvl: 2, lost: 2, cause: 'gift' },
+        state, CTX);
+    });
+    // …and the terminal frame, so the end-card is drawn too.
+    var over = frame(719, true);
+    ensurePlates(over);
+    document.getElementById('endcard').style.display = 'block';
+    window.GiftRefinementsChrome.frame(over, CTX, false);
+
+    var problems = selfCheck(state);
+    if (problems.length) {
+      fail('renderer fixture self-check: ' + problems.join('; '));
+      return;
+    }
+    requestAnimationFrame(function () {
+      document.documentElement.setAttribute('data-replay-loaded', 'true');
+    });
+  }
+
+  fetch('../../client/game_block.html')
+    .then(function (response) {
+      if (!response.ok) throw new Error('game_block.html HTTP ' + response.status);
+      return response.text();
+    })
+    .then(boot)
+    .catch(fail);
+})();
+</script>
+</body>
+</html>
