@@ -196,6 +196,16 @@ button.beat-marker {
   height: calc(14 * var(--u));
 }
 
+/* --- the end-card ------------------------------------------------------- */
+/* The inherited per-team stat panels are a CTF shape: "Lives left" over a
+   Player / K / D / Clstr / Cap table. None of those five columns exists in
+   this game, and the two plates are TOTALS rather than sides, so the panels
+   are hidden and the block writes the whole verdict into the headline, the
+   win-condition chip and the `how` line instead. The panels' markup is the
+   starter's and is left untouched. */
+#endcard .ec-teams { display: none; }
+#endcard .how { font-family: var(--pixfont); line-height: 1.6; }
+
 /* --- feed rows ---------------------------------------------------------- */
 .feed-row .gr-gift { color: #57c98a; }
 .feed-row .gr-bank { color: var(--amber); letter-spacing: 0.06em; }
@@ -468,9 +478,12 @@ button.beat-marker {
     var head = byId('ec-headline'), how = byId('ec-how'), cond = byId('ec-wincond');
     if (!head) return;
     head.className = 'headline';
-    head.textContent = o.draw
-      ? 'DEAD EVEN'
-      : upper(o.winner) + ' WINS \u2014 ' + (o.winnerPol || '');
+    // The winner's ALIAS is what the board showed; its POLICY name rides
+    // alongside — but only when the two differ, which they do not in an
+    // offline run where every seat is named for its alias.
+    var winnerPol = (o.winnerPol && o.winnerPol !== o.winner)
+      ? ' \u2014 ' + o.winnerPol : '';
+    head.textContent = o.draw ? 'DEAD EVEN' : upper(o.winner) + ' WINS' + winnerPol;
     if (cond) cond.textContent = o.endingText || '';
     var rows = (o.scores || []).slice().sort(function (a, b) {
       return b.score - a.score;

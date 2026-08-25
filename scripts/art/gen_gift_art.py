@@ -48,8 +48,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 DATA = os.path.join(ROOT, "data")
 
 CELL = 48
-STAGE_LO = (22, 17, 13)
-STAGE_HI = (36, 26, 18)
+# The deck has to READ. The starter's stage colours (#16110d -> #241a12) are
+# the page BACKGROUND; a floor painted in them renders as a black rectangle in
+# a 360 px iframe, which is what the first viewer-smoke screenshot showed. The
+# plate is lifted well clear of the backdrop and keeps the warm hue.
+STAGE_LO = (46, 35, 25)
+STAGE_HI = (74, 57, 40)
 INK = (42, 31, 22)
 PAPER = (242, 232, 216)
 AMBER = (232, 163, 61)
@@ -103,12 +107,12 @@ def floor_tile(seed: int, flip: bool) -> Image.Image:
     # the deck reads as laid plates rather than one flat sheet.
     for i in range(4, CELL - 4, 6):
         if flip:
-            draw.line([(4, i), (CELL - 5, i)], fill=(44, 33, 23, 255))
+            draw.line([(4, i), (CELL - 5, i)], fill=(88, 68, 48, 255))
         else:
-            draw.line([(i, 4), (i, CELL - 5)], fill=(44, 33, 23, 255))
+            draw.line([(i, 4), (i, CELL - 5)], fill=(88, 68, 48, 255))
     for cx, cy in ((5, 5), (CELL - 6, 5), (5, CELL - 6), (CELL - 6, CELL - 6)):
-        draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=(58, 44, 31, 255))
-        draw.ellipse([cx - 1, cy - 1, cx + 1, cy + 1], fill=(74, 57, 40, 255))
+        draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=(38, 29, 21, 255))
+        draw.ellipse([cx - 1, cy - 1, cx + 1, cy + 1], fill=(112, 88, 62, 255))
     return grain(tile, seed, 7)
 
 
@@ -116,13 +120,13 @@ def pillar_tile() -> Image.Image:
     """Poured stone: a pale block with a hard shadow on two sides."""
     tile = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
     draw = ImageDraw.Draw(tile)
-    draw.rectangle([0, 0, CELL - 1, CELL - 1], fill=(96, 82, 66, 255))
-    draw.rectangle([0, 0, CELL - 1, 3], fill=(126, 110, 90, 255))
-    draw.rectangle([0, 0, 3, CELL - 1], fill=(118, 102, 83, 255))
-    draw.rectangle([CELL - 5, 0, CELL - 1, CELL - 1], fill=(58, 47, 36, 255))
-    draw.rectangle([0, CELL - 5, CELL - 1, CELL - 1], fill=(50, 40, 31, 255))
+    draw.rectangle([0, 0, CELL - 1, CELL - 1], fill=(140, 122, 100, 255))
+    draw.rectangle([0, 0, CELL - 1, 3], fill=(178, 158, 130, 255))
+    draw.rectangle([0, 0, 3, CELL - 1], fill=(166, 146, 120, 255))
+    draw.rectangle([CELL - 5, 0, CELL - 1, CELL - 1], fill=(84, 70, 55, 255))
+    draw.rectangle([0, CELL - 5, CELL - 1, CELL - 1], fill=(70, 57, 44, 255))
     for y in range(10, CELL - 6, 12):
-        draw.line([(5, y), (CELL - 7, y)], fill=(74, 62, 49, 255))
+        draw.line([(5, y), (CELL - 7, y)], fill=(108, 92, 74, 255))
     return grain(tile, 4242, 9)
 
 
@@ -130,10 +134,10 @@ def wall_tile() -> Image.Image:
     """The border ring: darker, banded, unmistakably not floor."""
     tile = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
     draw = ImageDraw.Draw(tile)
-    draw.rectangle([0, 0, CELL - 1, CELL - 1], fill=(30, 23, 17, 255))
+    draw.rectangle([0, 0, CELL - 1, CELL - 1], fill=(26, 20, 15, 255))
     for y in range(0, CELL, 8):
-        draw.rectangle([2, y + 1, CELL - 3, y + 4], fill=(46, 36, 26, 255))
-    draw.rectangle([0, 0, CELL - 1, 1], fill=(64, 50, 36, 255))
+        draw.rectangle([2, y + 1, CELL - 3, y + 4], fill=(58, 45, 33, 255))
+    draw.rectangle([0, 0, CELL - 1, 1], fill=(96, 76, 55, 255))
     return grain(tile, 77, 6)
 
 
@@ -141,7 +145,7 @@ def pad_tile(lit: bool) -> Image.Image:
     """A floor vent. Dark while it regrows; a bright seam once a token sits."""
     tile = floor_tile(9001, False)
     draw = ImageDraw.Draw(tile)
-    inner = (SEEP if lit else (48, 74, 60))
+    inner = (SEEP if lit else (60, 96, 76))
     glow = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
     gdraw = ImageDraw.Draw(glow)
     gdraw.ellipse([8, 12, CELL - 9, CELL - 13],
