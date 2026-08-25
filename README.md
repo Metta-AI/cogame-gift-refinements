@@ -135,9 +135,10 @@ episodes respectively; they run in **release only** in CI, via the repo variable
 
 ## Where this repo differs from the design note
 
-The design note is the contract and the implementation follows it everywhere
-except the two places below. Both are recorded on the assertions themselves, not
-just here.
+The design note is the contract. The implementation follows it everywhere
+except the eight readings below, each of which is also recorded at the code or
+the assertion it affects. Two are threshold changes; the rest are readings of a
+sentence the note leaves open, and none of them changes a rule.
 
 **1. Two feasibility thresholds are the measured floor, not the note's target.**
 `tests/test_feasibility.nim` implements all four gates exactly as written. Two of
@@ -170,7 +171,41 @@ priority runs ahead of the job's movement, so a `collect` order still returns
 what it can when the partner walks into line). The constant is documented in
 `src/gift_refinements/scripted.nim` with the sweep that chose it.
 
-Two smaller notes, neither a rule change:
+**3. `gaveYouLastRound(P)` is counted in TOKENS, not beams.**
+`src/gift_refinements/ledger.nim:22-27`. The note's own worked ladder — *"B beams
+those three back, one at a time"* — only comes out right if a cog that received
+three refined tokens from one beam owes three beams, and the observation JSON in
+the note carries no `gaveYouLastRound` field to contradict it.
+
+**4. The kernel gates on the RELEVANT cooldown, not one shared cooldown.**
+`src/gift_refinements/kernel.nim:172-177`. The note says *"a cog whose relevant
+cooldown is still running emits `wait`"*: the move cooldown gates moves and the
+collect cooldown gates pick-ups. Gating pick-ups on the move cooldown would idle
+a cog standing on a loose token two ticks in three.
+
+**5. The `round` event and its beat land on the LAST TICK of the round, not the
+boundary tick.** `src/gift_refinements/sim.nim:436-445`. `closeRound()` runs
+after `sim.tick` has advanced past the frame that was recorded, and an event
+outside `0..ticksPlayed` is unplaceable on the scrubber and unindexable by the
+viewer. One tick, and it keeps every event inside the recorded range
+(`tests/test_replay.nim`).
+
+**6. A `gift` row is emitted BEFORE the receipt is applied**, so a `spill` the
+receipt causes lands immediately after the gift that caused it
+(`src/gift_refinements/sim.nim:265-268`). The note does not specify the order;
+this one lets a consumer attribute a spill without guessing, which is how
+`tests/test_ledger.nim` rebuilds the whole ledger from `events[]` alone.
+
+**7. `giftmiss` is a rule that kernel-driven play cannot reach.**
+`src/gift_refinements/kernel.nim:43-70`. The kernel only schedules a beam when
+`board.hittable(...)` holds — the note's own kernel rule 2 — and `hittable` and
+the resolver's `traceBeam` are the same pair over the same occupancy, with only
+the (motionless) consume step in between. So the rule, its `beam_fizzle` art and
+the feed's `giftmiss` branch are reachable by driving `sim.step` with a gift
+action directly (`tests/test_sim.nim`) and not by any policy. Making the kernel
+fire anyway would spend a beam on empty air, which the note does not ask for.
+
+**8. Two smaller notes, neither a rule change.**
 
 * **The seed is inert.** The note pins the RNG to "nothing but the tie-free
   jitter-free bookkeeping", so a scripted episode is a pure function of its
