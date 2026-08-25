@@ -425,6 +425,12 @@ proc runEpisode*(
   # --- shutdown, in this order ---------------------------------------------
   let results = sim.resultsJson()
   let over = overJson(sim.scene(), results, tracker, max(0, sim.tick - 1))
+  # The note's §Server: the `state` frame goes out at every round boundary AND
+  # at episode end (r1 review F13). A seat that keeps its own book of the match
+  # gets the settled position -- every score, every held pile after the
+  # autobank -- before `final` closes the socket.
+  for slot in seated:
+    sendSeat(slot, observationJson(sim.seatView(slot), sim.scene()))
   for slot in seated:
     sendSeat(slot, finalJson(sim, slot))
   broadcastFrame(sim, tracker, newJArray(), over)
