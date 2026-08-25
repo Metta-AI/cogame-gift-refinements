@@ -252,4 +252,27 @@ block earlySettleStaysInsideTheRecordedFrames:
     "the settled episode did not record reason deadline")
   banner "a deadline settle records its autobank inside 0..ticksPlayed"
 
+block aForfeitReplayIsStillPlayable:
+  ## r1 review F2: nobody connects, the round loop never runs, and the replay
+  ## used to be written with `frames: []` -- exactly the input `parseReplay`
+  ## raises "replay has no frames" on, which the shipped viewer surfaces as
+  ## `data-replay-error`. The note says a forfeit still writes results AND a
+  ## replay, so the artifact has to be one the viewer can open.
+  var idle = initSimServer(variantConfig("refinery"))
+  idle.finish(erForfeit)
+  let raw = replayBytes(idle)
+  check(parseJson(raw){"frames"}.len == 1,
+    "a forfeit replay carries " & $parseJson(raw){"frames"}.len & " frames")
+  let doc = parseReplay(raw)              ## raises on an empty frame list
+  check(doc.frames.len == 1, "the forfeit replay did not round-trip a frame")
+  check(doc.maxTick() == 0, "the forfeit replay's maxTick is not 0")
+  check(doc.frames[0].tick == 0, "the forfeit frame is not tick 0")
+  check(doc.results{"reason"}.getStr() == "forfeit",
+    "the forfeit replay does not carry reason forfeit")
+  check(doc.eventsAt(0).len > 0, "the forfeit replay indexes nothing at tick 0")
+  for event in doc.events:
+    let t = int(event{"t"}.getBiggestInt())
+    check(t == 0, "a forfeit event sits at tick " & $t)
+  banner "a forfeit writes a replay the shipped parser and viewer accept"
+
 echo "test_replay OK"

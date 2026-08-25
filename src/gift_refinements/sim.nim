@@ -471,6 +471,15 @@ proc finish*(sim: var SimServer, reason: EndReason) =
   if sim.finished:
     return
   sim.finished = true
+  # A forfeit (nobody connected) and a deadline reached before the first tick
+  # both stop before any frame is recorded, and a replay with `frames: []` is
+  # one this repo's OWN parser rejects ("replay has no frames",
+  # replays.nim) -- the shipped viewer would show `data-replay-error` where the
+  # note asks for "results + replay are still written". Record the opening
+  # position so every legal `results.reason` writes a playable replay
+  # (r1 review F2).
+  if sim.frames.len == 0:
+    sim.captureFrame()
   sim.reason = reason
   sim.ending =
     case reason
