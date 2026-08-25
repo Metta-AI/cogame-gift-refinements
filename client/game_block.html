@@ -304,7 +304,7 @@ button.beat-marker {
 
   function ensurePlateSub(team) {
     var id = 'gr-sub-' + team;
-    var el = $(id);
+    var el = byId(id);
     if (el) return el;
     var plate = document.querySelector('.plate[data-team="' + team + '"]');
     if (!plate) return null;
