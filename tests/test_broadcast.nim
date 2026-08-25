@@ -283,6 +283,25 @@ block beatsAreLabelledClickableButtons:
       "there is no CSS rule for the " & kind & " beat")
   banner "every beat is a labelled, clickable button with CSS for its kind"
 
+block spoilersHoldThisBlocksBeatsBack:
+  ## r1 review F3. The chrome's own gate (chrome_common.js `applySpoilers`)
+  ## only sees the markers IT created; this block appends its own labelled
+  ## buttons, so `?spoilers=0` only holds them back if the block gates them
+  ## too — through the chrome object the page hands it in GR_CTX.
+  check("C: C," in page,
+    "GR_CTX no longer carries the chrome object the block's spoiler gate reads")
+  check("CTX.C.getSpoilers()" in gameBlock,
+    "the game block does not read the chrome's [spoilers] mode")
+  check("function applyGiftSpoilers(s)" in gameBlock,
+    "the game block has no spoiler gate for its own beat markers")
+  check("giftMarkers.push(el)" in gameBlock,
+    "the block's beat buttons are not registered with its spoiler gate")
+  check("applyGiftSpoilers(s);" in gameBlock,
+    "the spoiler gate is never applied on a frame")
+  check("attributeFilter: ['class']" in gameBlock,
+    "toggling [spoilers] while paused would not re-gate this block's markers")
+  banner "?spoilers=0 holds this block's beat markers back as well"
+
 block legibilityAt360:
   check(".plate-name" in gameBlock and "flex: 1 1 auto" in gameBlock and
         "min-width: 3.2em" in gameBlock,

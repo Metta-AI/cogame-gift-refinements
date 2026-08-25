@@ -244,6 +244,42 @@ button.beat-marker {
   }
 
   // ---- scrubber beats ------------------------------------------------------
+  // The chrome's own [spoilers] gate (chrome_common.js applySpoilers) only ever
+  // sees the markers IT created — the unlabelled divs renderBeatMarkers pushes
+  // into its private markerEls. This block builds its own LABELLED, CLICKABLE
+  // buttons (the note's transport rule), so the gate has to be applied to them
+  // here as well, or ?spoilers=0 would ship the whole story — every defection
+  // notch and the game-over notch — on the first HUD frame, which is the half
+  // of the note's sentence the comment below promises.
+  var giftMarkers = [];        // the buttons this block placed, for the gate
+  function spoilersOn() {
+    return !CTX || !CTX.C || typeof CTX.C.getSpoilers !== 'function' ||
+      !!CTX.C.getSpoilers();
+  }
+  function applyGiftSpoilers(s) {
+    if (!s) return;
+    var on = spoilersOn();
+    for (var i = 0; i < giftMarkers.length; i++) {
+      var el = giftMarkers[i];
+      var hide = !on && el.__tick > s.t;
+      if (el.__hidden !== hide) {
+        el.__hidden = hide;
+        el.style.display = hide ? 'none' : '';
+      }
+    }
+  }
+  // The chrome flips the mode from its own button and from the `o` key, and
+  // both paths run through setSpoilers, which toggles `.on` on #btn-spoilers.
+  // Watching that class re-gates these markers the moment the mode changes,
+  // even while playback is paused.
+  function watchSpoilerToggle() {
+    var btn = byId('btn-spoilers');
+    if (!btn || !window.MutationObserver) return;
+    new MutationObserver(function () {
+      applyGiftSpoilers(CTX && CTX.getState ? CTX.getState() : null);
+    }).observe(btn, { attributes: true, attributeFilter: ['class'] });
+  }
+
   function buildGiftBeats(s, tick, kind, seat, label) {
     var key = tick + '|' + kind + '|' + (seat == null ? '' : seat);
     if (placedBeats[key]) return;
@@ -264,6 +300,7 @@ button.beat-marker {
       CTX.send('s:' + tick);
     });
     scrub.appendChild(el);
+    giftMarkers.push(el);
   }
 
   // ---- feed ----------------------------------------------------------------
@@ -600,10 +637,13 @@ button.beat-marker {
         }
       }
     }
+    // Same synchronous pass as the build, so ?spoilers=0 never flashes a beat
+    // that is ahead of the playhead.
+    applyGiftSpoilers(s);
   }
 
   window.GiftRefinementsChrome = {
-    install: function (ctx) { CTX = ctx; },
+    install: function (ctx) { CTX = ctx; watchSpoilerToggle(); },
     frame: giftFrame,
     event: giftEvent
   };
