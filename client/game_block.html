@@ -600,7 +600,13 @@ button.beat-marker {
 
   function giftFrame(s, ctx, jumped) {
     CTX = ctx;
-    if (jumped) placedBeats = {};
+    // NOTE: `placedBeats` is deliberately NOT cleared on a jump. A beat marker
+    // is permanent — nothing ever removes one from #scrub — so clearing the
+    // dedup map on a backward seek only made playback re-append a second,
+    // exactly superimposed button every time it re-crossed a live `round` or
+    // `defect` tick (r1 review F4). Building a beat is idempotent in the tick,
+    // the kind and the seat; the spoiler gate is what hides the ones ahead of
+    // the playhead after a seek, not a rebuild.
     var stage = byId('stage');
     if (stage) {
       // Under 480px the trust hexagon collapses to its three text rows.

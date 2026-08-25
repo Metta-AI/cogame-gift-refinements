@@ -283,6 +283,18 @@ block beatsAreLabelledClickableButtons:
       "there is no CSS rule for the " & kind & " beat")
   banner "every beat is a labelled, clickable button with CSS for its kind"
 
+block beatMarkersAreBuiltOnce:
+  ## r1 review F4. Nothing ever removes a `.beat-marker` from #scrub, so the
+  ## dedup map must survive a jump: clearing it on a backward seek made
+  ## playback append a second, exactly superimposed button every time it
+  ## re-crossed a live `round` or `defect` tick.
+  let withoutDeclaration = gameBlock.replace("var placedBeats = {};", "")
+  check("placedBeats = {}" notin withoutDeclaration,
+    "the beat dedup map is reset, so a backward seek re-appends markers")
+  check("if (placedBeats[key]) return;" in gameBlock,
+    "buildGiftBeats no longer dedups on tick|kind|seat")
+  banner "beat markers are built once per tick|kind|seat and never rebuilt"
+
 block spoilersHoldThisBlocksBeatsBack:
   ## r1 review F3. The chrome's own gate (chrome_common.js `applySpoilers`)
   ## only sees the markers IT created; this block appends its own labelled
