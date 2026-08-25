@@ -315,18 +315,27 @@
     // hardest one. 360 px is the featured-match iframe.
     var widths = [1280, 960, 760, 640, 480, 360];
     var state = null;
+
+    // The TERMINAL frame first, so the end-card is exercised. It is drawn
+    // before the playing frames on purpose: the feed holds only the last few
+    // rows and the clock reads FINAL on a gameover frame, so whatever is
+    // rendered LAST is what the self-check and the DOM smoke measure — and
+    // that has to be the worst case, not the epilogue.
+    sizeStage(1280);
+    var over = frame(719, true);
+    ensurePlates(over);
+    document.getElementById('endcard').style.display = 'block';
+    window.GiftRefinementsChrome.frame(over, CTX, false);
+    document.getElementById('endcard').style.display = 'none';
+
     widths.forEach(function (width) {
       sizeStage(width);
       state = frame(300, false);
       ensurePlates(state);
       window.GiftRefinementsChrome.frame(state, CTX, true);
-      // Every feed row kind, with the worst-case strings on every seat.
-      for (var seat = 0; seat < 6; seat++) {
-        window.GiftRefinementsChrome.event(
-          { k: 'order', t: 300, seat: seat, round: 5, say: WORST_SAY,
-            notes: WORST_NOTES, source: seat === 5 ? 'fallback' : 'llm' },
-          state, CTX);
-      }
+      // Every feed row kind. The `order` rows carry the full-cap `say` and go
+      // LAST, because the feed keeps only its newest few and those rows are
+      // the ones the whole fixture exists to measure.
       window.GiftRefinementsChrome.event(
         { k: 'gift', t: 300, from: 0, to: 2, sent: 0, got: 1, n: 3 }, state, CTX);
       window.GiftRefinementsChrome.event(
@@ -336,12 +345,13 @@
       window.GiftRefinementsChrome.event(
         { k: 'spill', t: 300, seat: 2, lvl: 2, lost: 2, cause: 'gift' },
         state, CTX);
+      for (var seat = 0; seat < 6; seat++) {
+        window.GiftRefinementsChrome.event(
+          { k: 'order', t: 300, seat: seat, round: 5, say: WORST_SAY,
+            notes: WORST_NOTES, source: seat === 5 ? 'fallback' : 'llm' },
+          state, CTX);
+      }
     });
-    // …and the terminal frame, so the end-card is drawn too.
-    var over = frame(719, true);
-    ensurePlates(over);
-    document.getElementById('endcard').style.display = 'block';
-    window.GiftRefinementsChrome.frame(over, CTX, false);
 
     var problems = selfCheck(state);
     if (problems.length) {
