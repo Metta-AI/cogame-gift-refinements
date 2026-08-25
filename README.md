@@ -136,7 +136,7 @@ episodes respectively; they run in **release only** in CI, via the repo variable
 ## Where this repo differs from the design note
 
 The design note is the contract. The implementation follows it everywhere
-except the eight readings below, each of which is also recorded at the code or
+except the nine readings below, each of which is also recorded at the code or
 the assertion it affects. Two are threshold changes; the rest are readings of a
 sentence the note leaves open, and none of them changes a rule.
 
@@ -205,7 +205,24 @@ the feed's `giftmiss` branch are reachable by driving `sim.step` with a gift
 action directly (`tests/test_sim.nim`) and not by any policy. Making the kernel
 fire anyway would spend a beam on empty air, which the note does not ask for.
 
-**8. Two smaller notes, neither a rule change.**
+**8. `client/broadcast_core.js` ships BYTE-FOR-BYTE where the note says it is
+forked.** The note's provenance table has the starter's renderer forked so that
+"the board draw becomes the tile grid, pillars, seep pads, loose tokens, cogs,
+inventory badges and gift beams". Every one of those draws exists — in
+`src/gift_refinements/global.nim` instead (the baked deck at `:162-213`, and
+pads, tokens, cogs, alias plates, inventory badges, beams, bursts and puffs at
+`:267-449`), emitted as Sprite v1 objects into the starter's own generic sprite
+renderer, which is therefore left untouched (md5 identical to
+`coworld-ctf/client/broadcast_core.js`, and `Dockerfile.replay-viewer` copies it
+into the bundle unchanged). The visible output is the note's §What it draws; the
+structural claim is not. This is the conservative direction — a byte-identical
+starter renderer and one place where the board is drawn — with one side effect
+worth knowing: no canvas `fillText` runs in the replay path at all, so
+`--strict-text-bounds` on the bundle measures zero strings and the worst-case
+renderer fixture (`tools/ci/renderer_fixture.html`) is what actually gates drawn
+text.
+
+**9. Two smaller notes, neither a rule change.**
 
 * **The seed is inert.** The note pins the RNG to "nothing but the tie-free
   jitter-free bookkeeping", so a scripted episode is a pure function of its
