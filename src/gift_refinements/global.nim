@@ -64,7 +64,11 @@ const
     ## Ticks a beam / burst / puff stays on screen. Derived from the EVENT
     ## stream in a window around the playhead rather than remembered, so a seek
     ## rebuilds exactly the same picture and scrubbing back un-draws it.
-  CogPx = 44                   ## drawn cog size in board px (cells are 48)
+  # Exported because tools/ci/renderer_fixture.html mirrors this anchor in JS:
+  # the real board is blitted as sprites, so the fixture is the only place
+  # --strict-text-bounds has canvas text to measure, and
+  # tests/test_broadcast.nim pins the mirror to this value.
+  CogPx* = 44                  ## drawn cog size in board px (cells are 48)
   TokenPx = 24
   PipPx = 12
 

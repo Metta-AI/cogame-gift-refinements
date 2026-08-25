@@ -229,6 +229,34 @@ block theViewerPacketBuildsAndDecodes:
 #  Viewer provenance
 # ---------------------------------------------------------------------------
 
+block theFixtureMirrorsTheEnginesBoardAnchors:
+  ## r1 review F11. The board is blitted as sprites, so no `fillText` ever runs
+  ## on the replay path and `--strict-text-bounds` on the bundle measures ZERO
+  ## strings; the worst-case renderer fixture is what actually gates drawn
+  ## text, and its canvas half is a HAND-WRITTEN MIRROR of global.nim's
+  ## anchors. A drift there would leave the flag measuring the wrong geometry
+  ## while staying green, so the mirror is pinned to the engine's constants
+  ## here.
+  let fixture = readFile(repoRoot / "tools" / "ci" / "renderer_fixture.html")
+  let anchors = "var CELL = " & $CellPx & ", COLS = " & $Cols & ", ROWS = " &
+    $Rows & ", COG = " & $CogPx & ";"
+  check(anchors in fixture,
+    "the fixture's mirrored board anchors are not the engine's; expected the " &
+    "line: " & anchors)
+  var cells = "var cells = ["
+  for slot in 0 ..< SeatCount:
+    if slot > 0: cells.add(", ")
+    cells.add("[" & $SpawnCells[slot][0] & ", " & $SpawnCells[slot][1] & "]")
+  cells.add("];")
+  check(cells in fixture,
+    "the fixture draws its cogs somewhere other than the engine's spawns; " &
+    "expected: " & cells)
+  check("ctx.font = '13px monospace';" in fixture,
+    "the fixture's caption size no longer matches global.nim's 13 px text")
+  check("client/chrome_common.js` is NOT loaded" in fixture,
+    "the fixture's header no longer says which half of the chrome is real")
+  banner "the renderer fixture's canvas mirror is pinned to the engine anchors"
+
 block chromeCommonIsUnedited:
   ## `client/chrome_common.js` ships BYTE-FOR-BYTE. It is not edited, which is
   ## why the wire-constants global keeps the name window.CTF_WIRE.

@@ -16,15 +16,32 @@
 
   This fixture is the worst case, built by hand:
     * a full-cap 80-rune `say` on EVERY seat, in multi-byte runes;
-    * a full-cap 320-rune `notes`;
+    * a full-cap 320-rune `notes`, drawn in the feed's expanded row (the row is
+      opened here, because a hidden string measures nothing);
     * the longest policy names the platform can produce;
     * a full inventory badge (15 / 15 / 15) on every cog;
     * a beam in flight;
     * a saturated trust graph with a defection on it;
-  rendered through the REAL chrome — `client/chrome_common.js` and the real
-  appended game block out of `client/game_block.html`, fetched and injected
-  rather than re-typed — at several canvas sizes, and it self-checks its own
-  string lengths before signalling.
+  at several canvas sizes, self-checking its own string lengths before
+  signalling.
+
+  WHAT IS REAL HERE AND WHAT IS A STAND-IN (be precise, or this file starts
+  lying about its own coverage):
+    * REAL — the whole DOM half. `client/game_block.html` is FETCHED and
+      injected, style and script, so every feed row, roster chip, trust-graph
+      row and plate string measured by `tools/ci/dom_text_smoke.mjs` is drawn
+      by the shipped code.
+    * STAND-IN — the chrome around it. `client/chrome_common.js` is NOT loaded:
+      the plate machinery below (`ensurePlates`) and the small CSS block above
+      are the minimum the game block needs to have somewhere to draw, mirroring
+      the starter's own boxes.
+    * MIRROR — the canvas half. The board is drawn in Nim
+      (`src/gift_refinements/global.nim`, blitted as sprites), so nothing on
+      the real replay path calls `fillText` and `--strict-text-bounds` would
+      measure ZERO strings there. `drawBoard` below re-implements the alias
+      plate and inventory badge at global.nim's anchors so the flag has text to
+      measure at all. tests/test_broadcast.nim pins those mirrored constants to
+      the engine's, so the mirror cannot drift silently.
 
   It signals exactly like the replay bundle: `data-replay-loaded="true"` on
   <html> when it has drawn, `data-replay-error="<message>"` if anything failed.
@@ -221,10 +238,18 @@
     getState: function () { return null; }
   };
 
-  // The board canvas. The Nim renderer (src/gift_refinements/global.nim) is the
-  // source of these anchors: an alias plate is centred under the cog's feet and
-  // the inventory badge sits above its head. Mirroring them here is what lets
-  // --strict-text-bounds see a caption that has nowhere to go.
+  // The board canvas: a MIRROR of the Nim renderer, not the renderer. The real
+  // board is drawn in src/gift_refinements/global.nim and blitted as sprites,
+  // so nothing on the replay path calls fillText and --strict-text-bounds
+  // would have nothing to measure. The anchors mirrored here are global.nim's:
+  // the alias plate is centred under the cog's feet (global.nim `py + cellPx -
+  // 6`, 13 px) and the inventory badge sits above its head (`py - badge.height
+  // + 4`, 13 px).
+  //
+  // THE NEXT LINE IS PINNED. tests/test_broadcast.nim asserts it verbatim
+  // against sim_types.CellPx / Cols / Rows and global.CogPx, and asserts the
+  // spawn cells below match the engine's, so a drifted anchor fails a test
+  // instead of quietly making this fixture measure the wrong geometry.
   var CELL = 48, COLS = 24, ROWS = 14, COG = 44;
   function drawBoard(width, height) {
     var canvas = document.getElementById('board');
@@ -233,7 +258,7 @@
     var ctx = canvas.getContext('2d');
     ctx.fillStyle = '#241a12';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.font = '13px monospace';
+    ctx.font = '13px monospace';        // global.nim textSprite(.., 13)
     ctx.textAlign = 'center';
     var cells = [[2, 2], [21, 2], [2, 11], [21, 11], [2, 6], [21, 7]];
     for (var i = 0; i < 6; i++) {
