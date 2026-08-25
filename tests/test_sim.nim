@@ -265,4 +265,24 @@ block determinism:
     "expected " & $config.totalTicks() & " frames, got " & $a.frames.len)
   banner "the same seed and the same orders produce an identical gameHash"
 
+block theKernelNeverSchedulesABeamThatMisses:
+  ## r1 review F6. The miss rule is real (asserted above through `step`
+  ## directly), but no policy can produce one: `kernel.beamAction` only
+  ## schedules a beam when `board.hittable(...)` holds against `sim.occupied`,
+  ## and the only step between that decision and the resolution at step 4 is
+  ## step 3's consume, which moves nobody -- `hittable` and `traceBeam` are the
+  ## same pair, so the beam always connects. That is the note's own rule 2 for
+  ## the kernel ("`target` is currently hittable"), and it means a beam is
+  ## never spent on empty air. This pins it: a whole episode of kernel-driven
+  ## play, on every variant, emits gifts and NOT ONE giftmiss.
+  for variant in ["refinery", "scarce", "long-beam", "open-floor"]:
+    let config = variantConfig(variant)
+    let sim = playScripted(allOf(blReciprocator), config)
+    check(sim.countEvents(evGift) > 0,
+      variant & ": the episode fired no beams at all")
+    check(sim.countEvents(evGiftMiss) == 0,
+      variant & ": the kernel scheduled " & $sim.countEvents(evGiftMiss) &
+      " beam(s) that found no cog")
+  banner "a kernel-scheduled beam always connects: zero giftmiss in real play"
+
 echo "test_sim OK"

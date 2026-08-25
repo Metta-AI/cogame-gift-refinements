@@ -46,6 +46,16 @@ proc beamAction(sim: SimServer, slot: int): tuple[ok: bool, action: Action] =
     sim.config.beamRange, sim.occupied)
   if not shot.ok:
     return
+  # CONSEQUENCE, recorded because it makes one event unreachable in play
+  # (r1 review F6): `hittable` and the resolver's `traceBeam` are the same
+  # pair over the same `sim.occupied`, and the only step between this decision
+  # (step 2) and step 4 is the consume, which moves nobody. So a beam this
+  # kernel schedules ALWAYS connects, and `giftmiss` -- the rule, its
+  # `beam_fizzle` art and the feed branch -- can only be produced by driving
+  # `sim.step` with a gift action directly, as tests/test_sim.nim does. That
+  # is the note's rule 2 for the kernel ("`target` is currently hittable"),
+  # not a deviation from it: no cog ever spends a beam on empty air.
+  # tests/test_sim.nim pins both halves.
   result.ok = true
   result.action =
     case shot.dir
