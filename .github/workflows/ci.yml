@@ -168,8 +168,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # Same pin as coworld-release.yml's `uvx --from "coworld[auth]==0.1.38"`.
-          pip install "coworld==0.1.38"
+          # Same pin as coworld-release.yml's COWORLD_PKG.
+          pip install "coworld==0.1.43"
       - name: Load coworld_manifest_template.json with coworld's own loader
         run: |
           python3 tools/ci/check_manifest_loads.py \
