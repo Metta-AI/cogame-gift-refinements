@@ -174,6 +174,34 @@ block requestRateStaysUnderThirtyPerMinute:
   banner "worst case " & $ratePerMinute & " rpm and " & $worstEpisodeSeconds &
     " s, inside 30 rpm and " & $config.playDeadlineSeconds() & " s"
 
+block lobbyStaysOpenUntilEverySeatIsIn:
+  ## The lobby closes early ONLY with every declared seat connected AND
+  ## registered. Closing as soon as the connected sockets had registered let
+  ## the fast scripted filler pods close it while the champion pods were still
+  ## dialling in, and those seats then played the scripted baseline for the
+  ## whole episode (league rounds 2 and 4, 2026-08-26).
+  let config = defaultGameConfig()
+  check(config.numAgents == SeatCount, "the default config is not six seats")
+  for connected in 1 ..< SeatCount:
+    check(not config.lobbyShouldClose(connected, connected, 0),
+      "the lobby closed at t=0 with only " & $connected & " seats in")
+    check(not config.lobbyShouldClose(connected, connected, 5),
+      "the lobby closed after 5 s with only " & $connected & " seats in")
+    check(not config.lobbyShouldClose(
+        connected, connected, config.playerConnectTimeoutSeconds - 1),
+      "the lobby closed before the connect timeout with only " &
+      $connected & " seats in")
+  check(not config.lobbyShouldClose(SeatCount, SeatCount - 1, 10),
+    "the lobby closed with a connected seat that had not registered")
+  check(config.lobbyShouldClose(SeatCount, SeatCount, 0),
+    "the lobby did not close with every seat connected and registered")
+  check(config.lobbyShouldClose(0, 0, config.playerConnectTimeoutSeconds),
+    "the lobby did not close at playerConnectTimeoutSeconds")
+  check(config.lobbyShouldClose(
+      3, 3, config.playerConnectTimeoutSeconds + 1),
+    "a partly-filled lobby did not close after the connect timeout")
+  banner "the lobby waits for every seat unless the connect timeout elapsed"
+
 block oneBatchCarriesEveryOpenSeat:
   ## The batch is built ONE request per open seat, in one go. Building it here
   ## the same way `decide.turn` does is what makes "never sequentially"

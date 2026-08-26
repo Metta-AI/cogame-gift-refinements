@@ -208,6 +208,20 @@ proc update*(config: var GameConfig, configJson: string) =
 proc totalTicks*(config: GameConfig): int =
   config.rounds * config.ticksPerRound
 
+proc lobbyShouldClose*(
+  config: GameConfig, connected, registered, elapsedSeconds: int
+): bool =
+  ## The lobby's close rule. It closes EARLY only when every declared seat is
+  ## both connected and registered; otherwise it waits out
+  ## `playerConnectTimeoutSeconds`. Closing on "every socket that happens to be
+  ## connected" fired the instant the fast scripted filler pods registered, and
+  ## the champion pods then connected into an already-running round loop and
+  ## played the scripted baseline for the whole episode (gift-refinements
+  ## league rounds 2 and 4, 2026-08-26).
+  if elapsedSeconds >= config.playerConnectTimeoutSeconds:
+    return true
+  connected >= config.numAgents and registered >= config.numAgents
+
 proc playDeadlineSeconds*(config: GameConfig): int =
   ## 60% of the episode budget: the wall clock the round loop settles inside.
   config.episodeTimeoutSeconds * PlayDeadlinePermille div 1000

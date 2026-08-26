@@ -354,18 +354,14 @@ proc runEpisode*(
     (getMonoTime() - episodeStart).inSeconds.int
 
   # --- the lobby ------------------------------------------------------------
-  # ADAPTIVE: return as soon as every CONNECTED socket has registered rather
-  # than waiting out the full grace (commons-family, 2026-08-24). Bounded by
+  # The early return is `lobbyShouldClose`: EVERY declared seat connected and
+  # registered, never "every socket that happens to be connected". Bounded by
   # playerConnectTimeoutSeconds either way; missing seats play reciprocator.
   var registered = 0
-  let lobbyDeadline = config.playerConnectTimeoutSeconds
-  while elapsedSeconds() < lobbyDeadline:
+  while true:
     registered += engine.drainRegistrations()
-    let connected = connectedSeats()
-    if connected.len >= config.numAgents and registered >= config.numAgents:
-      break
-    if connected.len > 0 and registered >= connected.len and
-        elapsedSeconds() >= 5:
+    if config.lobbyShouldClose(
+        connectedSeats().len, registered, elapsedSeconds()):
       break
     sleep(100)
   registered += engine.drainRegistrations()
