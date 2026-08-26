@@ -269,6 +269,16 @@ block policiesJsonNamesThisGame:
         "policy " & policy["name"].getStr() &
         " has no USE_BEDROCK: the platform gates the player pod's Bedrock " &
         "sidecar on it and the seat silently plays scripted (cogolf)")
+      # League round 4, 2026-08-26: the mirror prompt's "spend or bank"
+      # vocabulary led the model to answer job "consume" -- consume is a
+      # FIELD, not a job -- and the seat fell back to the scripted order.
+      let prompt = env["PLAYER_PROMPT"].getStr()
+      check("collect, meet, hold or evade" in prompt,
+        "champion prompt " & policy["name"].getStr() &
+        " does not state the job enum")
+      check("Consuming is NOT a job" in prompt,
+        "champion prompt " & policy["name"].getStr() &
+        " does not say that consume is a field rather than a job")
     else:
       inc scripted
       check(env["PLAYER_SCRIPTED"].getStr() in ["reciprocator", "hoarder"],

@@ -491,19 +491,32 @@ certification green and deterministic.
   growing. Never send a second gift to a cog that has taken from you and returned nothing for two
   full rounds; walk away from it and open with someone else instead. Watch your lowest level: while
   you hold raw tokens every beam you fire sends raw, so if you are sitting on refined stock and
-  want to send it back, stop collecting and spend or bank your raw first. Bank only when you are
-  holding more than ten tokens or when there are two rounds left; a token in your hands can still
-  be trebled, a token in the bank cannot."*
+  want to send it back, stop collecting — use job "hold" or job "meet" — and clear the raw first,
+  either by firing it away as gift beams or by setting the "consume" field to "end" for that round.
+  Set "consume":"end" only when you are holding more than ten tokens or when there are two rounds
+  left, and "consume":"never" otherwise; a token in your hands can still be trebled, a token in the
+  bank cannot. SCHEMA, no exceptions: "job" is exactly one of collect, meet, hold or evade.
+  Consuming is NOT a job — it is the separate "consume" field, whose only values are "now", "end"
+  and "never" — so never answer with "job":"consume". Whenever "job" is "meet", or "gift" is
+  greater than 0, "target" must be another cog's alias string, never null."*
 - `gift-refinements-patron` (champion #2, daveey-1): *"You are a patron: you build one deep
   refining chain and defend it. In the first two rounds probe by sending a single raw token to two
   different cogs and note who returns anything at all. Then pick the ONE cog with the best return
-  and commit — meet it every round, feed it every raw token you collect, and let it feed you refined
-  stock; a pair that keeps one token moving turns it into nine, and nine split is better than one
-  hoarded. Never split your beams across three partners; a half-fed chain mints nothing. If your
-  partner takes two rounds in a row without returning, cut it off permanently, say so, and adopt the
-  cog with the highest net given to you. Hold your super tokens until the last two rounds and then
-  spend beams returning half of them — the close banks whatever is left, so the only tokens you
-  waste are the ones you never minted."*
+  and commit — answer job "meet" with that cog as "target" every round, feed it every raw token you
+  collect, and let it feed you refined stock; a pair that keeps one token moving turns it into
+  nine, and nine split is better than one hoarded. Never split your beams across three partners; a
+  half-fed chain mints nothing. If your partner takes two rounds in a row without returning, cut it
+  off permanently, say so, and adopt the cog with the highest net given to you. Keep the "consume"
+  field on "never" while the chain is running: hold your super tokens until the last two rounds and
+  then spend beams returning half of them — the close banks whatever is left, so the only tokens
+  you waste are the ones you never minted. SCHEMA, no exceptions: "job" is exactly one of collect,
+  meet, hold or evade. Consuming is NOT a job — it is the separate "consume" field, whose only
+  values are "now", "end" and "never" — so never answer with "job":"consume". Whenever "job" is
+  "meet", or "gift" is greater than 0, "target" must be another cog's alias string, never null."*
+
+  (Both prompts carry the SCHEMA sentence because the round-4 league episode of 2026-08-26 had the
+  mirror seat answer `"job":"consume"` twice and fall back to the scripted order: `consume` is a
+  field of the order, not a job. `tests/test_manifest.nim` asserts the sentence is present.)
 
 ### Scripted baselines (both fieldable, both league fillers)
 
