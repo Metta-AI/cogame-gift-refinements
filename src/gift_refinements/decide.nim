@@ -406,8 +406,10 @@ proc turn*(
   # The Bedrock sidecar caps 30 requests/minute PER EPISODE. Holding the START
   # of consecutive batches `minTurnSeconds` apart pins the worst case (6 + 6
   # retries) at 28.8 rpm. The cert fixture sets it to 0, so offline runs pay
-  # nothing. It is applied AFTER the round's ticks are simulated, so it never
-  # delays a decision the sim is waiting on.
+  # nothing. It is applied at the TOP of `turn`, which `server.nim` calls before
+  # the round's ticks, and it is measured between batch STARTS -- so the ticks
+  # of the round just played count against the floor and a round costs
+  # `max(minTurnSeconds, batch)`, never their sum (r1 review A1).
   if open.len > 0 and engine.batchStarted and sim.config.minTurnSeconds > 0:
     let
       spacingMs = sim.config.minTurnSeconds * 1000
