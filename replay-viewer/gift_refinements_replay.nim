@@ -37,6 +37,9 @@ var
   playing = true
   looping = false
   speedIndex = 0
+  halfPhase = false
+    ## Frame parity while at 1/2x speed (ReplayHalfSpeedIndex): ticks advance
+    ## only on the odd frames, toggled once per grFrame call.
   leadSent = false
   endHold = 0
 
@@ -64,9 +67,6 @@ proc bytesFromPointer(data: ptr uint8, length: int): string =
   if length > 0:
     copyMem(result[0].addr, data, length)
 
-proc speedFor(index: int): int =
-  PlaybackSpeeds[clamp(index, 0, PlaybackSpeeds.high)]
-
 proc windowEvents(): JsonNode =
   ## Every event inside the FX window ending at the playhead, plus the events
   ## that fired on this exact tick (the chrome feed reads those).
@@ -84,7 +84,7 @@ proc renderCurrent() =
       if terminal: overJson(doc.scene, doc.results, tracker, playhead)
       else: nil
     chrome = buildStateJson(
-      doc.scene, frame, tracker, events, playing, speedFor(speedIndex),
+      doc.scene, frame, tracker, events, playing, replayDisplaySpeed(speedIndex),
       doc.maxTick(), looping, transportEnabled = true, over = over,
       leadSeries = (if leadSent: @[] else: doc.pool),
       beats = (if leadSent: nil else: doc.beats))
@@ -108,14 +108,8 @@ proc applyCommand(command: char) =
   of ' ': playing = not playing
   of 'p': playing = true
   of 'P': playing = false
-  of '1': speedIndex = 0
-  of '2': speedIndex = 1
-  of '3': speedIndex = 2
-  of '4': speedIndex = 3
-  of '8': speedIndex = 4
-  of '6': speedIndex = 5
-  of '+', '=': speedIndex = min(PlaybackSpeeds.high, speedIndex + 1)
-  of '-', '_': speedIndex = max(0, speedIndex - 1)
+  of '1', '2', '3', '4', '5', '8', '6', '+', '=', '-', '_':
+    applySpeedCommand(speedIndex, command)
   of ',', '<':
     playing = false
     seekTo(0)
@@ -167,6 +161,7 @@ proc grInput(data: ptr uint8, length: cint) {.exportc: "gr_input", cdecl.} =
 proc grFrame(): cint {.exportc: "gr_frame", cdecl.} =
   if not runtimeLoaded:
     return 0
+  halfPhase = not halfPhase
   stampStage("advance replay")
   try:
     if pendingSeek >= 0:
@@ -188,7 +183,10 @@ proc grFrame(): cint {.exportc: "gr_frame", cdecl.} =
           seekTo(0)
           playing = true
       else:
-        let next = min(doc.maxTick(), playhead + speedFor(speedIndex))
+        # At 1/2x (ReplayHalfSpeedIndex) the budget is 0 on even frames, so
+        # the playhead simply holds still every other presentation frame.
+        let next = min(doc.maxTick(),
+                       playhead + replayStepBudget(speedIndex, halfPhase))
         for tick in playhead + 1 .. next:
           for event in doc.eventsAt(tick):
             tracker.ingest(event)

@@ -31,7 +31,7 @@ proc chromeFrame(sim: SimServer, tick: int, terminal: bool): JsonNode =
       if terminal: overJson(sim.scene(), sim.resultsJson(), tracker, tick)
       else: nil
   parseJson(buildStateJson(
-    sim.scene(), frame, tracker, events, playing = true, speed = 1,
+    sim.scene(), frame, tracker, events, playing = true, speed = 1.0,
     maxTick = sim.frames.high, looping = false, transportEnabled = true,
     over = over, leadSeries = sim.pool, beats = beatsJson(sim)))
 
@@ -182,7 +182,7 @@ block theViewerPacketBuildsAndDecodes:
       for event in doc.eventsAt(at):
         events.add(event)
     let chrome = buildStateJson(
-      doc.scene, doc.frames[tick], tracker, events, playing = true, speed = 1,
+      doc.scene, doc.frames[tick], tracker, events, playing = true, speed = 1.0,
       maxTick = doc.maxTick(), looping = false, transportEnabled = true)
     var next: GlobalViewerState
     let packet = buildViewerPacket(
@@ -257,14 +257,20 @@ block theFixtureMirrorsTheEnginesBoardAnchors:
     "the fixture's header no longer says which half of the chrome is real")
   banner "the renderer fixture's canvas mirror is pinned to the engine anchors"
 
-block chromeCommonIsUnedited:
-  ## `client/chrome_common.js` ships BYTE-FOR-BYTE. It is not edited, which is
-  ## why the wire-constants global keeps the name window.CTF_WIRE.
+block chromeCommonCarriesOnlyTheFleetTransportPatch:
+  ## `client/chrome_common.js` ships as the starter's file plus ONLY the
+  ## fleet-wide 0.5x replay transport patch (the SPEEDS fallback and the
+  ## speed-chip command map), which is why the wire-constants global keeps
+  ## the name window.CTF_WIRE.
   let chrome = readFile(repoRoot / "client" / "chrome_common.js")
   check("window.ChromeCommon = function (ctx)" in chrome,
     "chrome_common.js is not the starter's file")
   check("window.CTF_WIRE" in chrome,
     "chrome_common.js reads a global this repo does not emit")
+  check("0.5: '5'" in chrome,
+    "the speed chips do not map the fleet-wide 0.5x chip to command '5'")
+  check("[0.5, 1, 2, 3, 4, 8, 16]" in chrome,
+    "the raw file:// SPEEDS fallback does not carry 0.5")
   # The other half of that invariant, asserted on the const the engine actually
   # emits rather than on a constant-true expression (r1 review F10): the same
   # string `Dockerfile.replay-viewer` greps for in the generated
@@ -272,7 +278,7 @@ block chromeCommonIsUnedited:
   check(WireConstantsJs.startsWith("window.CTF_WIRE={"),
     "the engine no longer emits the window.CTF_WIRE global chrome_common.js " &
     "reads; it emits " & WireConstantsJs[0 .. min(31, WireConstantsJs.high)])
-  banner "chrome_common.js is the starter's file, reading window.CTF_WIRE"
+  banner "chrome_common.js is the starter's file plus the 0.5x transport patch"
 
 block removedSurfacesAreGone:
   for id in ["viewpanel", "minimap-canvas", "zoombar", "zoom-slider",

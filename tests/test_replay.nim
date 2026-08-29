@@ -275,4 +275,29 @@ block aForfeitReplayIsStillPlayable:
     check(t == 0, "a forfeit event sits at tick " & $t)
   banner "a forfeit writes a replay the shipped parser and viewer accept"
 
+block halfSpeedIsAReplayOnlyCrawl:
+  ## The fleet-wide 1/2x replay speed: command '5' selects
+  ## ReplayHalfSpeedIndex, the chrome shows 0.5, and the step budget spends
+  ## one tick every OTHER presentation frame (halfPhase parity).
+  var speedIndex = 0
+  applySpeedCommand(speedIndex, '5')
+  check(speedIndex == ReplayHalfSpeedIndex, "'5' must select 1/2x")
+  check(replayDisplaySpeed(speedIndex) == 0.5,
+    "the chrome speed at 1/2x is 0.5, got " & $replayDisplaySpeed(speedIndex))
+  check(replaySpeedAt(speedIndex) == 1,
+    "the integer multiplier clamps to 1x at 1/2x")
+  check(replayStepBudget(speedIndex, halfPhase = false) == 0,
+    "an even frame at 1/2x spends no tick")
+  check(replayStepBudget(speedIndex, halfPhase = true) == 1,
+    "an odd frame at 1/2x spends one tick")
+  applySpeedCommand(speedIndex, '+')
+  check(speedIndex == 0, "'+' from 1/2x lands on 1x")
+  check(replayStepBudget(speedIndex, halfPhase = false) == 1,
+    "1x spends one tick every frame regardless of parity")
+  applySpeedCommand(speedIndex, '-')
+  check(speedIndex == ReplayHalfSpeedIndex, "'-' from 1x lands on 1/2x")
+  applySpeedCommand(speedIndex, '-')
+  check(speedIndex == ReplayHalfSpeedIndex, "1/2x is the floor")
+  banner "command '5' is a replay-only 1/2x: one tick every other frame"
+
 echo "test_replay OK"
