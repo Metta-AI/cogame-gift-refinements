@@ -2,9 +2,9 @@
 ## chrome must agree with (playback speeds, fps, the chrome sprite id).
 ##
 ## Forked from `coworld-ctf/src/ctf/wire_constants.nim`. THE GLOBAL KEEPS ITS
-## NAME. `client/chrome_common.js` reads `window.CTF_WIRE` and that file ships
-## BYTE-FOR-BYTE, so renaming the global would force a byte change in a file
-## that must not change; `Dockerfile.replay-viewer`'s
+## NAME. `client/chrome_common.js` reads `window.CTF_WIRE` and ships as the
+## starter's file plus only the fleet-wide 0.5x transport patch, so renaming
+## the global would force a gratuitous divergence; `Dockerfile.replay-viewer`'s
 ## `grep -q '^window.CTF_WIRE={'` assertion is kept for the same reason.
 ##
 ## Historically each HTML client re-typed these as literals and nothing
@@ -24,7 +24,9 @@ proc jsIntArray(values: openArray[int]): string =
   result.add "]"
 
 const WireConstantsJs* =
-  "window.CTF_WIRE={speeds:" & jsIntArray(PlaybackSpeeds) &
+  # 0.5 is the replay-only half speed (ReplayHalfSpeedIndex, command '5');
+  # it rides ahead of the engine's integer PlaybackSpeeds.
+  "window.CTF_WIRE={speeds:[0.5," & jsIntArray(PlaybackSpeeds)[1..^1] &
   ",fps:" & $TargetFps &
   ",chromeSpriteId:" & $BroadcastChromeSpriteId &
   ",shotFxTicks:" & $FxWindow &

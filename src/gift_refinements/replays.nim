@@ -226,3 +226,47 @@ proc eventsAt*(doc: ReplayDoc, tick: int): JsonNode =
 
 proc maxTick*(doc: ReplayDoc): int =
   if doc.frames.len == 0: 0 else: doc.frames[^1].tick
+
+# ---------------------------------------------------------------------------
+# playhead speed
+# ---------------------------------------------------------------------------
+# The playhead itself lives in `replay-viewer/gift_refinements_replay.nim`
+# (module globals in the wasm entry); the speed transport lives here so the
+# native tests can exercise it.
+
+const ReplayHalfSpeedIndex* = -1
+  ## `speedIndex` sentinel for the replay-only 1/2x playback (command '5'):
+  ## one tick is spent every other presentation frame (halfPhase parity).
+
+proc replaySpeedAt*(speedIndex: int): int =
+  ## The integer tick multiplier (1 while at 1/2x — the fractional pace
+  ## lives in replayStepBudget's frame parity).
+  PlaybackSpeeds[clamp(speedIndex, 0, PlaybackSpeeds.high)]
+
+proc replayDisplaySpeed*(speedIndex: int): float =
+  ## The speed the chrome shows: 0.5 at half speed, else the integer speed.
+  if speedIndex == ReplayHalfSpeedIndex: 0.5
+  else: float(replaySpeedAt(speedIndex))
+
+proc replayStepBudget*(speedIndex: int, halfPhase: bool): int =
+  ## Ticks the playhead may advance this presentation frame. At 1/2x a tick
+  ## is spent only every other frame (halfPhase parity).
+  if speedIndex == ReplayHalfSpeedIndex:
+    (if halfPhase: 1 else: 0)
+  else:
+    replaySpeedAt(speedIndex)
+
+proc applySpeedCommand*(speedIndex: var int, command: char) =
+  ## One playback speed command. '5' selects the 1/2x replay speed
+  ## (ReplayHalfSpeedIndex); '-' floors there.
+  case command
+  of '+', '=': speedIndex = min(speedIndex + 1, PlaybackSpeeds.high)
+  of '-', '_': speedIndex = max(speedIndex - 1, ReplayHalfSpeedIndex)
+  of '5': speedIndex = ReplayHalfSpeedIndex
+  of '1': speedIndex = 0
+  of '2': speedIndex = 1
+  of '3': speedIndex = 2
+  of '4': speedIndex = 3
+  of '8': speedIndex = 4
+  of '6': speedIndex = 5
+  else: discard

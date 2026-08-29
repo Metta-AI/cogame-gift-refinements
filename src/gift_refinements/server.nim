@@ -227,7 +227,7 @@ proc broadcastFrame(sim: SimServer, tracker: BroadcastTracker,
     let
       sendLead = not state.leadSent
       chrome = buildStateJson(
-        scene, frame, tracker, events, playing = true, speed = 1,
+        scene, frame, tracker, events, playing = true, speed = 1.0,
         maxTick = sim.totalTicks() - 1, looping = false,
         transportEnabled = false, over = over,
         leadSeries = (if sendLead: sim.pool else: @[]),
