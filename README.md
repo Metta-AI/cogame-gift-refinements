@@ -21,7 +21,7 @@ chooses to stand.
 
 ---
 
-## A policy is just a prompt
+## Policies
 
 Every seat runs the same image, `/bin/gift-refinements-player`, and is switched by
 its environment:
@@ -37,6 +37,13 @@ coworld upload-policy coworld-gift-refinements:latest \
 
 `PLAYER_SCRIPTED=reciprocator|hoarder` fields a published baseline instead. A seat
 that sets neither plays `reciprocator`.
+
+`PLAYER_JEV=1` asks Jev System One to rank the complete legal standing orders
+from `reciprocator` and `hoarder` each round. The game checks the returned
+probability set and applies its argmax. This bounded choice policy uses the
+same game image; it can run through the Bedrock sidecar, Observatory capture,
+or a direct TypeSafe key. It cannot invent a new order. Without a Jev
+transport, the seat falls back to `reciprocator`.
 
 Once per round (60 ticks) the **game** container — not the player — sends every
 seat its observation and asks for one standing order, **all six calls in one
@@ -111,6 +118,13 @@ nimby use 2.2.4
 nimby --global sync nimby.lock
 nim r --hints:off --path:src tests/test_sim.nim        # any one gate
 nim c -d:release --path:src -o:gift-refinements src/gift_refinements.nim
+
+# Matched local episodes with six real WebSocket players (one Jev seat).
+# Export TYPESAFE_API_KEY before the Jev commands:
+tools/local_episode.sh reciprocator 7
+tools/local_episode.sh jev 7
+tools/local_episode.sh reciprocator 7 hoarder
+tools/local_episode.sh jev 7 hoarder
 ```
 
 `tests/test_baseline.nim` and `tests/test_feasibility.nim` play 144 and 576 whole

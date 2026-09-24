@@ -65,7 +65,8 @@ type
     playerSockets: Table[WebSocket, SeatSocket]
     slotSockets: Table[int, WebSocket]
     globalViewers: Table[WebSocket, GlobalViewerState]
-    pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string]]
+    pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string,
+      jev: bool]]
     closed: seq[WebSocket]
     serving: bool
 
@@ -184,7 +185,8 @@ proc websocketHandler(
         appState.pendingRegistrations.add((
           slot,
           payload{"prompt"}.getStr(),
-          payload{"scripted"}.getStr()))
+          payload{"scripted"}.getStr(),
+          payload{"jev"}.getBool()))
   of ErrorEvent, CloseEvent:
     {.gcsafe.}:
       withLock appState.lock:
@@ -269,7 +271,8 @@ proc drainRegistrations(engine: var DecisionEngine): int =
   ## registration is HELD and re-applied rather than dropped: joins race the
   ## lobby, and a dropped registration silently made a champion seat play
   ## scripted (paintball, 2026-08-25).
-  var pending: seq[tuple[slot: int, prompt, scripted: string]] = @[]
+  var pending: seq[tuple[slot: int, prompt, scripted: string,
+    jev: bool]] = @[]
   {.gcsafe.}:
     withLock appState.lock:
       pending = appState.pendingRegistrations
@@ -280,7 +283,12 @@ proc drainRegistrations(engine: var DecisionEngine): int =
     if engine.seats[item.slot].registered:
       continue
     engine.seats[item.slot].registered = true
-    if item.prompt.len > 0:
+    if item.jev:
+      engine.seats[item.slot].isLlm = true
+      engine.seats[item.slot].isJev = true
+      engine.seats[item.slot].label = "jev"
+      engine.seats[item.slot].baseline = blReciprocator
+    elif item.prompt.len > 0:
       engine.seats[item.slot].isLlm = true
       engine.seats[item.slot].prompt = item.prompt
       engine.seats[item.slot].label = "prompt"
@@ -290,7 +298,7 @@ proc drainRegistrations(engine: var DecisionEngine): int =
       engine.seats[item.slot].baseline = parseBaseline(item.scripted)
       engine.seats[item.slot].label = $engine.seats[item.slot].baseline
     echo registerRecord(item.slot, engine.seats[item.slot].label,
-      (if engine.seats[item.slot].isLlm: "llm" else: "scripted"),
+      engine.policyKind(item.slot),
       $engine.seats[item.slot].baseline)
     inc result
 

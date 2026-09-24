@@ -15,6 +15,27 @@ suite "llm"
 
 let aliases = @Aliases
 
+block jevChoiceValidation:
+  let sim = initSimServer(defaultGameConfig())
+  let view = sim.seatView(0)
+  let criteria = jevCriteria(view, sim.scene(), sim.config.maxBeamsPerRound)
+  check(criteria.len == 2, "Jev did not get both standing-order choices")
+  let response = %*{"answers": {"decision": {
+    "type": "choice", "choice": "hoarder", "confidence": 0.8,
+    "probabilities": {"reciprocator": 0.7, "hoarder": 0.3}
+  }}, "usage": {"input_tokens": 10, "output_tokens": 2}}
+  let order = jevOrder(response, criteria, view, sim.config.maxBeamsPerRound)
+  check(order.say == reciprocatorOrder(view, sim.config.maxBeamsPerRound).say,
+    "Jev did not use the probability argmax")
+  response["answers"]["decision"]["probabilities"]["hoarder"] = %0.7
+  var raised = false
+  try:
+    discard jevOrder(response, criteria, view, sim.config.maxBeamsPerRound)
+  except OrderError:
+    raised = true
+  check(raised, "Jev accepted probabilities that do not sum to one")
+  banner "Jev validates the full choice distribution and applies its argmax"
+
 block extractsFencedAndProsePrefixedReplies:
   let fenced = "Sure! Here you go:\n```json\n" &
     "{\"job\":\"meet\",\"target\":\"Aro\",\"gift\":2}\n```\nHope that helps."
