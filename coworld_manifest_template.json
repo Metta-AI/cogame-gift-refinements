@@ -53,7 +53,7 @@
     "protocols": {
       "player": {
         "type": "text",
-        "value": "gift-refinements.player.v2. JSON text frames over the seat WebSocket. The game sends welcome, seat-private state, and final frames. A prompt or scripted player sends {\"type\":\"prompt\",\"prompt\":str,\"scripted\":str}. Any external policy sends {\"type\":\"register\",\"control\":\"external\"}, receives {\"type\":\"observation\",\"id\":int,\"observation\":{seat-private state}}, and replies {\"type\":\"action\",\"id\":int,\"action\":{job,target,gift,consume,say,notes}}. The game parses the standing order through the same action schema used by prompt policies. Missing actions use the reciprocator baseline. The reference player uses PLAYER_JEV=1 for player-side System One ranking."
+        "value": "gift-refinements.player.v2. JSON text frames over the seat WebSocket. The game sends welcome, seat-private state, and final frames. A prompt or scripted player sends {\"type\":\"prompt\",\"prompt\":str,\"scripted\":str}. Any external policy sends {\"type\":\"register\",\"control\":\"external\"}, receives {\"type\":\"observation\",\"id\":int,\"observation\":{seat-private state}}, and replies {\"type\":\"action\",\"id\":int,\"action\":{job,target,gift,consume,say,notes}}. The game parses the standing order through the same action schema used by prompt policies. Missing actions use the reciprocator baseline."
       },
       "global": {
         "type": "text",
