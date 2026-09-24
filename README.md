@@ -38,16 +38,15 @@ coworld upload-policy coworld-gift-refinements:latest \
 `PLAYER_SCRIPTED=reciprocator|hoarder` fields a published baseline instead. A seat
 that sets neither plays `reciprocator`.
 
-`PLAYER_JEV=1` asks Jev System One to rank the complete legal standing orders
-from `reciprocator` and `hoarder` each round. The game checks the returned
-probability set and applies its argmax. This bounded choice policy uses the
-same game image; it can run through the Bedrock sidecar, Observatory capture,
-or a direct TypeSafe key. It cannot invent a new order. Without a Jev
-transport, the seat falls back to `reciprocator`.
+`PLAYER_JEV=1` runs System One in the player container. It ranks ordinary
+collect, hold, evade, meet, and gift orders from that seat's observation. The
+game validates and applies the selected order through its normal action path.
+The policy can use the Bedrock sidecar, Observatory capture, or a direct
+TypeSafe key. Without a transport, the seat plays `reciprocator`.
 
-Once per round (60 ticks) the **game** container — not the player — sends every
-seat its observation and asks for one standing order, **all six calls in one
-parallel batch**. A deterministic kernel then walks and beams that order for the
+Once per round (60 ticks), the game sends external policies their seat-private
+observations and accepts ordinary standing orders. Prompt seats still share
+one parallel game-hosted model batch. A deterministic kernel walks each order for the
 next 60 ticks. That is 72 LLM calls per episode instead of 4 320, and it is why
 the coworld secret rides on the *game* runnable.
 

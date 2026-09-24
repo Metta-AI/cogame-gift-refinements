@@ -23,7 +23,7 @@ const
 
   GameName* = "gift-refinements"
   ReplayProtocol* = "gift-refinements.replay.v1"
-  PlayerProtocol* = "gift-refinements.player.v1"
+  PlayerProtocol* = "gift-refinements.player.v2"
 
   # ---- the board (design note "## The game" -> "The board") ---------------
   Cols* = 24

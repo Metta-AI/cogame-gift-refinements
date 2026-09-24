@@ -43,7 +43,7 @@ elif variant == 'open-floor':
     config['pillars'] = 0
 Path(path).write_text(json.dumps(config))
 PY
-if [ ! -x tmp/bin/gift-refinements ]; then
+if [ "${SKIP_BUILD:-0}" != 1 ]; then
   nim c --hints:off -o:tmp/bin/gift-refinements src/gift_refinements.nim
   nim c --hints:off -o:tmp/bin/gift-refinements-player src/gift_refinements_player.nim
 fi
@@ -78,9 +78,11 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 results = json.loads((path / 'results.json').read_text())
+replay = json.loads((path / 'episode.replay').read_text())
 log = (path / 'game.log').read_text()
 usage = [tuple(map(int, match)) for match in re.findall(
-    r'input_tokens (\d+) output_tokens (\d+)', log)]
+    r'input_tokens (\d+) output_tokens (\d+)',
+    (path / 'player0.log').read_text())]
 print(json.dumps({
     'artifacts': str(path), 'score': results['scores'][0],
     'gifts_sent': results['gifts_sent'][0],
@@ -89,5 +91,8 @@ print(json.dumps({
     'input_tokens': sum(item[0] for item in usage),
     'output_tokens': sum(item[1] for item in usage),
     'fallbacks': int(re.search(r'fallbacks=(\d+)', log).group(1)),
+    'seat0_external_orders': sum(event['source'] == 'external'
+        for event in replay['events'] if event.get('k') == 'order'
+        and event['seat'] == 0),
 }))
 PY

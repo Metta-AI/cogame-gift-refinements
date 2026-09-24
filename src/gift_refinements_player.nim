@@ -1,5 +1,5 @@
 ## The player container (`/bin/gift-refinements-player`): a prompt, scripted,
-## or Jev choice policy.
+## or external action policy.
 ##
 ## Forked from `coworld-ctf/src/paintball_player.nim`. This process is
 ## DELIBERATELY THIN. It connects to its seat, sends ONE registration frame
@@ -23,6 +23,7 @@
 
 import std/[json, options, os, strutils]
 
+import gift_refinements/jev_policy
 import whisky
 
 const
@@ -32,12 +33,12 @@ const
   ResendEveryMs = 2000
   ReconnectAttempts = 6
 
-proc registrationFrame(prompt, scripted: string, jev: bool): string =
+proc registrationFrame(prompt, scripted: string, external: bool): string =
   ## The one registration message. `scripted` is an empty string when the seat
   ## is an LLM seat, so the game can tell "no baseline named" from
   ## "reciprocator named explicitly".
-  $(%*{"type": "prompt", "prompt": prompt, "scripted": scripted,
-    "jev": jev})
+  if external: $ %*{"type": "register", "control": "external"}
+  else: $ %*{"type": "prompt", "prompt": prompt, "scripted": scripted}
 
 when isMainModule:
   let url = getEnv("COWORLD_PLAYER_WS_URL", getEnv("COGAMES_ENGINE_WS_URL"))
@@ -46,7 +47,11 @@ when isMainModule:
   let
     prompt = getEnv("PLAYER_PROMPT").strip()
     scripted = getEnv("PLAYER_SCRIPTED").strip()
-    jev = getEnv("PLAYER_JEV") == "1"
+    jevRequested = getEnv("PLAYER_JEV") == "1"
+    jev = jevRequested and (
+      getEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME").strip().len > 0 or
+      getEnv("METTA_CAPTURE_URL").strip().len > 0 or
+      getEnv("TYPESAFE_API_KEY").strip().len > 0)
     label = block:
       let explicit = getEnv("PLAYER_POLICY_LABEL").strip()
       if explicit.len > 0: explicit
@@ -100,7 +105,9 @@ when isMainModule:
       lastResend = 0.0
       done = false
     try:
-      socket.send(registrationFrame(prompt, scripted, jev), TextMessage)
+      socket.send(registrationFrame(prompt,
+        (if jevRequested and not jev: "reciprocator" else: scripted), jev),
+        TextMessage)
       while true:
         let received = socket.receiveMessage(200)
         if resends < RegistrationResends:
@@ -108,7 +115,9 @@ when isMainModule:
           if lastResend >= float(ResendEveryMs):
             lastResend = 0.0
             inc resends
-            socket.send(registrationFrame(prompt, scripted, jev), TextMessage)
+            socket.send(registrationFrame(prompt,
+              (if jevRequested and not jev: "reciprocator" else: scripted),
+              jev), TextMessage)
         if received.isNone:
           continue                  ## a read timeout, not a closed socket
         inc frames
@@ -127,9 +136,16 @@ when isMainModule:
           echo "gift-refinements player: seated as ",
             payload{"name"}.getStr(), " (slot ", payload{"slot"}.getInt(), ")"
           resends = 0               ## keep re-sending across the admission race
-          socket.send(registrationFrame(prompt, scripted, jev), TextMessage)
+          socket.send(registrationFrame(prompt,
+            (if jevRequested and not jev: "reciprocator" else: scripted), jev),
+            TextMessage)
         of "state":
-          discard                   ## the game decides; this seat only listens
+          discard
+        of "observation":
+          if jev:
+            let action = chooseAction(payload["observation"])
+            socket.send($ %*{"type": "action", "id": payload["id"],
+              "action": action}, TextMessage)
         of "final":
           echo "gift-refinements player: episode over, reason=",
             payload{"reason"}.getStr()

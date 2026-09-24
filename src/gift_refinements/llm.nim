@@ -48,10 +48,6 @@ type
     model*: string
     maxOutputTokens*: int
     disabled*: bool
-    jevEndpoint*: string
-    jevKey*: string
-    jevModel*: string
-    jevTrajectoryId*: string
     throttled*: bool
       ## The provider answered 429 and there is no other candidate model to
       ## rotate to. Set per round, cleared by the round loop: retrying inside
@@ -108,23 +104,6 @@ proc newLlmClient*(config: GameConfig): LlmClient =
   let
     bedrockEndpoint = getEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME").strip()
     bedrockToken = getEnv("AWS_BEARER_TOKEN_BEDROCK").strip()
-    captureUrl = getEnv("METTA_CAPTURE_URL").strip()
-    typesafeKey = getEnv("TYPESAFE_API_KEY").strip()
-  if bedrockEndpoint.len > 0:
-    result.jevEndpoint = bedrockEndpoint.strip(chars = {'/'}, leading = false)
-    result.jevModel = "typesafe/jev-1.13"
-  elif captureUrl.len > 0:
-    result.jevEndpoint = captureUrl.strip(chars = {'/'}, leading = false)
-    result.jevKey = getEnv("METTA_CAPTURE_KEY").strip()
-    if result.jevKey.len == 0:
-      raise newException(LlmError, "METTA_CAPTURE_KEY is required")
-    result.jevModel = "typesafe/jev-1.13"
-    result.jevTrajectoryId = "gift-refinements-jev-" & $config.seed
-  elif typesafeKey.len > 0:
-    result.jevEndpoint = getEnv("TYPESAFE_BASE_URL",
-      "https://api.typesafe.ai").strip(chars = {'/'}, leading = false)
-    result.jevKey = typesafeKey
-    result.jevModel = getEnv("TYPESAFE_DEFAULT_MODEL", "jev-latest")
   if bedrockEndpoint.len > 0 or bedrockToken.len > 0:
     let region = getEnv("AWS_REGION", getEnv("AWS_DEFAULT_REGION", "us-west-2"))
     let endpoint =
@@ -146,8 +125,6 @@ proc newLlmClient*(config: GameConfig): LlmClient =
   else:
     result.transport = ltNone
     result.disabled = true
-    if result.jevEndpoint.len > 0:
-      result.curl = newCurly()
     ## The exact phrase phase 60 greps the GAME log for, alongside
     ## "falling back": "LLM provider is unavailable".
     echo LogPrefix, "no credentials \u2014 the LLM provider is unavailable; ",

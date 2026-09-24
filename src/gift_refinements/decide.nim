@@ -36,7 +36,7 @@ type
     ## What one seat registered as. A seat that registers with neither field --
     ## or never registers at all -- is `reciprocator`.
     isLlm*: bool
-    isJev*: bool
+    isExternal*: bool
     prompt*: string
     baseline*: Baseline
     label*: string
@@ -58,54 +58,9 @@ proc initDecisionEngine*(sim: SimServer): DecisionEngine =
     result.seats[slot].label = "reciprocator"
 
 proc policyKind*(engine: DecisionEngine, seat: int): string =
-  if seat >= 0 and seat < SeatCount and engine.seats[seat].isJev: "jev"
+  if seat >= 0 and seat < SeatCount and engine.seats[seat].isExternal: "external"
   elif seat >= 0 and seat < SeatCount and engine.seats[seat].isLlm: "llm"
   else: "scripted"
-
-proc jevCriteria*(view: SeatView, scene: Scene,
-                  maxBeams: int): JsonNode =
-  result = newJObject()
-  for kind in [blReciprocator, blHoarder]:
-    let order = scriptedOrder(kind, view, maxBeams)
-    let target = if order.target >= 0: scene.names[order.target]
-                 else: "none"
-    result[$kind] = %("job " & $order.job & ", target " & target &
-      ", gift up to " & $order.gift & " beams, consume " &
-      $order.consume & "; " & order.say)
-
-proc jevOrder*(payload, criteria: JsonNode, view: SeatView,
-               maxBeams: int): Order =
-  let answer = payload["answers"]["decision"]
-  let probabilities = answer["probabilities"]
-  let reported = answer["choice"].getStr()
-  if answer["type"].getStr() != "choice" or
-      not criteria.hasKey(reported) or probabilities.len != criteria.len:
-    raise newException(OrderError, "Jev returned the wrong choice set")
-  let confidence = answer["confidence"].getFloat()
-  if confidence < 0 or confidence > 1:
-    raise newException(OrderError, "Jev confidence is outside [0, 1]")
-  var total = 0.0
-  var best = -1.0
-  var choice = ""
-  for name, probability in probabilities.pairs:
-    if not criteria.hasKey(name):
-      raise newException(OrderError, "Jev returned an unknown choice")
-    let value = probability.getFloat()
-    if value < 0 or value > 1:
-      raise newException(OrderError, "Jev probability is outside [0, 1]")
-    total += value
-    if value > best:
-      best = value
-      choice = name
-  if abs(total - 1) > probabilities.len.float * 0.005 + 1e-6:
-    raise newException(OrderError, "Jev probabilities do not sum to one")
-  result = scriptedOrder(
-    (if choice == $blReciprocator: blReciprocator else: blHoarder),
-    view, maxBeams)
-  echo "gift-refinements jev: choice ", choice, " reported ", reported,
-    " confidence ", confidence, " model ", payload{"model"}.getStr(),
-    " input_tokens ", payload["usage"]{"input_tokens"}.getInt(),
-    " output_tokens ", payload["usage"]{"output_tokens"}.getInt()
 
 # ---------------------------------------------------------------------------
 #  The observation
@@ -398,7 +353,7 @@ proc repairMissingOrders*(engine: DecisionEngine, sim: var SimServer) =
       sim.orders[seat] = order
       sim.haveOrder[seat] = true
 
-proc installOrder(sim: var SimServer, seat: int, order: Order) =
+proc installOrder*(sim: var SimServer, seat: int, order: Order) =
   sim.orders[seat] = order
   sim.haveOrder[seat] = true
 
@@ -431,8 +386,7 @@ proc turn*(
   var open: seq[int] = @[]
   for seat in 0 ..< SeatCount:
     if engine.seats[seat].isLlm and not engine.llmOff and
-        (if engine.seats[seat].isJev:
-          engine.client.jevEndpoint.len > 0 else: not engine.client.disabled):
+        not engine.client.disabled:
       open.add(seat)
     elif engine.seats[seat].isLlm:
       var order = reciprocatorOrder(sim.seatView(seat),
@@ -474,21 +428,7 @@ proc turn*(
   var attempt = 0
   while open.len > 0 and attempt < 2:
     if engine.client.disabled:
-      var enabled: seq[int]
-      for seat in open:
-        if engine.seats[seat].isJev:
-          enabled.add(seat)
-        else:
-          var order = reciprocatorOrder(sim.seatView(seat),
-            sim.config.maxBeamsPerRound)
-          order.source = osFallback
-          sim.installOrder(seat, order)
-          engine.fallbacks += 1
-          result.add(fallbackRecord(roundIndex, seat, attempt + 1,
-            "no_credentials", "the LLM became unavailable"))
-      open = enabled
-      if open.len == 0:
-        break
+      break
     if getMonoTime() - turnStart >= budget:
       for seat in open:
         result.add(fallbackRecord(roundIndex, seat, attempt + 1, "timeout",
@@ -500,32 +440,10 @@ proc turn*(
     for seat in open:
       let view = sim.seatView(seat)
       var user = userPrompt(view, scene, engine.seats[seat].prompt)
-      if engine.seats[seat].isJev:
-        var headers: HttpHeaders
-        headers["content-type"] = "application/json"
-        if engine.client.jevKey.len > 0:
-          headers["authorization"] = "Bearer " & engine.client.jevKey
-        else:
-          headers["x-coworld-player-slot"] = $seat
-        if engine.client.jevTrajectoryId.len > 0:
-          headers["x-metta-trajectory-id"] =
-            engine.client.jevTrajectoryId & "-" & $seat
-        let body = %*{
-          "model": engine.client.jevModel,
-          "state": systemPrompt(view, scene) & "\n\n" & user,
-          "questions": {"decision": {
-            "type": "choice",
-            "instructions": "Choose the standing order that maximizes your eventual banked tokens. Account for reciprocity: gifts can treble into refined or super tokens if returned, but an unreturned gift costs you a token.",
-            "criteria": jevCriteria(view, scene, sim.config.maxBeamsPerRound)
-          }}
-        }
-        batch.post(engine.client.jevEndpoint & "/v1/systemone",
-          headers, $body, $seat)
-      else:
-        if attempt > 0:
-          user.add(RetryHint)
-        let request = engine.client.requestFor(systemPrompt(view, scene), user)
-        batch.post(request.url, request.headers, request.body, $seat)
+      if attempt > 0:
+        user.add(RetryHint)
+      let request = engine.client.requestFor(systemPrompt(view, scene), user)
+      batch.post(request.url, request.headers, request.body, $seat)
     let started = getMonoTime()
     # curly hands the deadline to CURLOPT_TIMEOUT, whose granularity is WHOLE
     # SECONDS, so this conversion FLOORS. sim_config REJECTS a sub-second
@@ -538,26 +456,12 @@ proc turn*(
     for position, seat in open:
       var cause = "parse_error"
       try:
-        var order: Order
-        if engine.seats[seat].isJev:
-          let response = responses[position].response
-          let error = responses[position].error
-          if response.code == 429:
-            engine.client.throttled = true
-          if error.len > 0 or response.code < 200 or response.code >= 300:
-            raise newException(OrderError, "Jev transport failed: " &
-              error & " HTTP " & $response.code)
-          let view = sim.seatView(seat)
-          order = jevOrder(parseJson(response.body),
-            jevCriteria(view, scene, sim.config.maxBeamsPerRound), view,
-            sim.config.maxBeamsPerRound)
-        else:
-          let text = engine.client.textOf(
-            responses[position].response, responses[position].error,
-            batch[position].url)
-          order = parseOrder(
-            extractJsonObject(text), seat, scene.names,
-            sim.config.maxBeamsPerRound)
+        let text = engine.client.textOf(
+          responses[position].response, responses[position].error,
+          batch[position].url)
+        var order = parseOrder(
+          extractJsonObject(text), seat, scene.names,
+          sim.config.maxBeamsPerRound)
         order.source = if attempt == 0: osLlm else: osRetry
         order.latencyMs = latency
         sim.installOrder(seat, order)
@@ -566,14 +470,10 @@ proc turn*(
         if responses[position].error.len > 0:
           cause = (if "timeout" in responses[position].error.toLowerAscii():
                      "timeout" else: "transport_error")
-        elif engine.client.throttled:
+        elif error.msg.startsWith("llm throttled"):
           ## Name the throttle for what it is: reporting a 429 as a
           ## `parse_error` is what made the hosted log unreadable.
           cause = "throttled"
-        elif engine.seats[seat].isJev and
-            (responses[position].response.code < 200 or
-             responses[position].response.code >= 300):
-          cause = "transport_error"
         result.add(fallbackRecord(roundIndex, seat, attempt + 1, cause,
           error.msg))
         echo LogPrefix, "seat ", seat, " attempt ", attempt + 1,
@@ -597,8 +497,7 @@ proc turn*(
     sim.installOrder(seat, order)
     engine.fallbacks += 1
     let cause =
-      if not engine.seats[seat].isJev and
-          (engine.client.disabled or engine.client.transport == ltNone):
+      if engine.client.disabled or engine.client.transport == ltNone:
         "no_credentials"
       elif engine.llmOff: "budget_guard"
       elif engine.client.throttled: "throttled"
