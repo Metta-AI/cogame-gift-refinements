@@ -30,6 +30,7 @@ type
     osRetry = "retry"
     osFallback = "fallback"
     osScripted = "scripted"
+    osExternal = "external"
 
   Order* = object
     ## One seat's whole decision for one round (60 ticks). A deterministic

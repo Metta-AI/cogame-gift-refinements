@@ -15,7 +15,7 @@
 ##   WS   /global                           live spectator: the sprite protocol
 ##                                          plus the chrome TextMessage
 ##
-## The player protocol is `gift-refinements.player.v1`, JSON text frames.
+## The player protocol is `gift-refinements.player.v2`, JSON text frames.
 
 import
   std/[json, locks, monotimes, os, strutils, tables, times]
@@ -49,7 +49,7 @@ padding:24px}code{color:#e8a33d}</style></head><body>
 <p>This page is the seat's shell. It deliberately does <b>not</b> open the
 player websocket: the seat is driven by the policy container over
 <code>ws://&lt;host&gt;/player?slot=N&amp;token=T</code>, speaking
-<code>gift-refinements.player.v1</code>.</p>
+<code>gift-refinements.player.v2</code>.</p>
 <p>Spectate at <code>/client/global</code>.</p>
 </body></html>"""
 
@@ -65,7 +65,10 @@ type
     playerSockets: Table[WebSocket, SeatSocket]
     slotSockets: Table[int, WebSocket]
     globalViewers: Table[WebSocket, GlobalViewerState]
-    pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string]]
+    pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string,
+      external: bool]]
+    decisionId: int
+    pendingActions: seq[JsonNode]
     closed: seq[WebSocket]
     serving: bool
 
@@ -77,6 +80,7 @@ proc initAppState(config: GameConfig) =
   appState.playerSockets = initTable[WebSocket, SeatSocket]()
   appState.slotSockets = initTable[int, WebSocket]()
   appState.globalViewers = initTable[WebSocket, GlobalViewerState]()
+  appState.pendingActions = newSeq[JsonNode](SeatCount)
   appState.serving = true
 
 proc isWebSocketUpgrade(request: Request): bool =
@@ -178,13 +182,22 @@ proc websocketHandler(
         except CatchableError:
           echo "gift-refinements: seat ", slot, " sent an unparseable frame"
           return
-        if payload.kind != JObject or payload{"type"}.getStr() != "prompt":
-          echo "gift-refinements: seat ", slot, " sent an unknown frame kind"
+        if payload.kind != JObject:
           return
-        appState.pendingRegistrations.add((
-          slot,
-          payload{"prompt"}.getStr(),
-          payload{"scripted"}.getStr()))
+        case payload{"type"}.getStr()
+        of "prompt":
+          appState.pendingRegistrations.add((slot,
+            payload{"prompt"}.getStr(), payload{"scripted"}.getStr(), false))
+        of "register":
+          if payload["control"].getStr() != "external":
+            return
+          appState.pendingRegistrations.add((slot, "", "", true))
+        of "action":
+          if payload["id"].getInt() == appState.decisionId and
+              appState.pendingActions[slot].isNil:
+            appState.pendingActions[slot] = payload["action"]
+        else:
+          echo "gift-refinements: seat ", slot, " sent an unknown frame kind"
   of ErrorEvent, CloseEvent:
     {.gcsafe.}:
       withLock appState.lock:
@@ -269,7 +282,8 @@ proc drainRegistrations(engine: var DecisionEngine): int =
   ## registration is HELD and re-applied rather than dropped: joins race the
   ## lobby, and a dropped registration silently made a champion seat play
   ## scripted (paintball, 2026-08-25).
-  var pending: seq[tuple[slot: int, prompt, scripted: string]] = @[]
+  var pending: seq[tuple[slot: int, prompt, scripted: string,
+    external: bool]] = @[]
   {.gcsafe.}:
     withLock appState.lock:
       pending = appState.pendingRegistrations
@@ -280,7 +294,11 @@ proc drainRegistrations(engine: var DecisionEngine): int =
     if engine.seats[item.slot].registered:
       continue
     engine.seats[item.slot].registered = true
-    if item.prompt.len > 0:
+    if item.external:
+      engine.seats[item.slot].isExternal = true
+      engine.seats[item.slot].label = "external"
+      engine.seats[item.slot].baseline = blReciprocator
+    elif item.prompt.len > 0:
       engine.seats[item.slot].isLlm = true
       engine.seats[item.slot].prompt = item.prompt
       engine.seats[item.slot].label = "prompt"
@@ -290,7 +308,7 @@ proc drainRegistrations(engine: var DecisionEngine): int =
       engine.seats[item.slot].baseline = parseBaseline(item.scripted)
       engine.seats[item.slot].label = $engine.seats[item.slot].baseline
     echo registerRecord(item.slot, engine.seats[item.slot].label,
-      (if engine.seats[item.slot].isLlm: "llm" else: "scripted"),
+      engine.policyKind(item.slot),
       $engine.seats[item.slot].baseline)
     inc result
 
@@ -389,8 +407,47 @@ proc runEpisode*(
           roundIndex, "; settling early"
         reason = erDeadline
         break
+      var decisionId: int
+      let decisionStart = getMonoTime()
+      {.gcsafe.}:
+        withLock appState.lock:
+          inc appState.decisionId
+          decisionId = appState.decisionId
+          appState.pendingActions = newSeq[JsonNode](SeatCount)
+      for slot in seated:
+        if engine.seats[slot].isExternal:
+          sendSeat(slot, %*{"type": "observation", "id": decisionId,
+            "observation": observationJson(sim.seatView(slot), sim.scene())})
       for record in engine.turn(sim, roundIndex, elapsedSeconds()):
         echo "gift-refinements: ", record
+      let deadline = decisionStart + initDuration(
+        milliseconds = config.turnBudgetMs)
+      while getMonoTime() < deadline:
+        var ready = true
+        {.gcsafe.}:
+          withLock appState.lock:
+            for slot in seated:
+              if engine.seats[slot].isExternal and
+                  appState.pendingActions[slot].isNil:
+                ready = false
+        if ready:
+          break
+        sleep(20)
+      for slot in seated:
+        if engine.seats[slot].isExternal:
+          var action: JsonNode
+          {.gcsafe.}:
+            withLock appState.lock:
+              action = appState.pendingActions[slot]
+          if not action.isNil:
+            var order = parseOrder(action, slot, sim.aliases,
+              sim.config.maxBeamsPerRound)
+            order.source = osExternal
+            order.latencyMs = (getMonoTime() - decisionStart).inMilliseconds.int
+            sim.installOrder(slot, order)
+      let elapsed = (getMonoTime() - decisionStart).inMilliseconds.int
+      if config.minTurnSeconds * 1000 > elapsed:
+        sleep(config.minTurnSeconds * 1000 - elapsed)
       for slot in 0 ..< SeatCount:
         let order = sim.orders[slot]
         sim.events.add(GiftEvent(

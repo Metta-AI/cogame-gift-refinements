@@ -36,6 +36,7 @@ type
     ## What one seat registered as. A seat that registers with neither field --
     ## or never registers at all -- is `reciprocator`.
     isLlm*: bool
+    isExternal*: bool
     prompt*: string
     baseline*: Baseline
     label*: string
@@ -57,7 +58,8 @@ proc initDecisionEngine*(sim: SimServer): DecisionEngine =
     result.seats[slot].label = "reciprocator"
 
 proc policyKind*(engine: DecisionEngine, seat: int): string =
-  if seat >= 0 and seat < SeatCount and engine.seats[seat].isLlm: "llm"
+  if seat >= 0 and seat < SeatCount and engine.seats[seat].isExternal: "external"
+  elif seat >= 0 and seat < SeatCount and engine.seats[seat].isLlm: "llm"
   else: "scripted"
 
 # ---------------------------------------------------------------------------
@@ -351,7 +353,7 @@ proc repairMissingOrders*(engine: DecisionEngine, sim: var SimServer) =
       sim.orders[seat] = order
       sim.haveOrder[seat] = true
 
-proc installOrder(sim: var SimServer, seat: int, order: Order) =
+proc installOrder*(sim: var SimServer, seat: int, order: Order) =
   sim.orders[seat] = order
   sim.haveOrder[seat] = true
 

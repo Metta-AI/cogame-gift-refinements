@@ -21,7 +21,7 @@ chooses to stand.
 
 ---
 
-## A policy is just a prompt
+## Policies
 
 Every seat runs the same image, `/bin/gift-refinements-player`, and is switched by
 its environment:
@@ -38,9 +38,15 @@ coworld upload-policy coworld-gift-refinements:latest \
 `PLAYER_SCRIPTED=reciprocator|hoarder` fields a published baseline instead. A seat
 that sets neither plays `reciprocator`.
 
-Once per round (60 ticks) the **game** container — not the player — sends every
-seat its observation and asks for one standing order, **all six calls in one
-parallel batch**. A deterministic kernel then walks and beams that order for the
+`PLAYER_JEV=1` runs System One in the player container. It ranks ordinary
+collect, hold, evade, meet, and gift orders from that seat's observation. The
+game validates and applies the selected order through its normal action path.
+The policy can use the Bedrock sidecar, Observatory capture, or a direct
+TypeSafe key. Without a transport, the seat plays `reciprocator`.
+
+Once per round (60 ticks), the game sends external policies their seat-private
+observations and accepts ordinary standing orders. Prompt seats still share
+one parallel game-hosted model batch. A deterministic kernel walks each order for the
 next 60 ticks. That is 72 LLM calls per episode instead of 4 320, and it is why
 the coworld secret rides on the *game* runnable.
 
@@ -111,6 +117,13 @@ nimby use 2.2.4
 nimby --global sync nimby.lock
 nim r --hints:off --path:src tests/test_sim.nim        # any one gate
 nim c -d:release --path:src -o:gift-refinements src/gift_refinements.nim
+
+# Matched local episodes with six real WebSocket players (one Jev seat).
+# Export TYPESAFE_API_KEY before the Jev commands:
+tools/local_episode.sh reciprocator 7
+tools/local_episode.sh jev 7
+tools/local_episode.sh reciprocator 7 hoarder
+tools/local_episode.sh jev 7 hoarder
 ```
 
 `tests/test_baseline.nim` and `tests/test_feasibility.nim` play 144 and 576 whole
