@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode=${1:?usage: local_episode.sh jev|reciprocator seed}
-seed=${2:?seed required}
-opponents=${3:-reciprocator}
-variant=${4:-refinery}
+seed=${1:?usage: local_episode.sh seed [opponents] [variant]}
+opponents=${2:-reciprocator}
+variant=${3:-refinery}
 port=${PORT:-18094}
-case "$mode" in
-  jev|reciprocator) ;;
-  *) echo "mode must be jev or reciprocator" >&2; exit 2 ;;
-esac
 case "$variant" in
   refinery|scarce|long-beam|open-floor) ;;
   *) echo "unknown variant: $variant" >&2; exit 2 ;;
@@ -56,19 +51,13 @@ game=$!
 trap 'kill "$game" 2>/dev/null || true' EXIT
 sleep 0.5
 for slot in {0..5}; do
-  if [ "$slot" = 0 ] && [ "$mode" = jev ]; then
-    COWORLD_PLAYER_WS_URL="ws://127.0.0.1:$port/player?slot=$slot&token=t$slot" \
-      PLAYER_JEV=1 tmp/bin/gift-refinements-player \
-      > "$episode_dir/player$slot.log" 2>&1 &
-  else
-    baseline=$opponents
-    if [ "$slot" = 0 ]; then
-      baseline=reciprocator
-    fi
-    COWORLD_PLAYER_WS_URL="ws://127.0.0.1:$port/player?slot=$slot&token=t$slot" \
-      PLAYER_SCRIPTED="$baseline" tmp/bin/gift-refinements-player \
-      > "$episode_dir/player$slot.log" 2>&1 &
+  baseline=$opponents
+  if [ "$slot" = 0 ]; then
+    baseline=reciprocator
   fi
+  COWORLD_PLAYER_WS_URL="ws://127.0.0.1:$port/player?slot=$slot&token=t$slot" \
+    PLAYER_SCRIPTED="$baseline" tmp/bin/gift-refinements-player \
+    > "$episode_dir/player$slot.log" 2>&1 &
 done
 wait "$game"
 python3 - "$episode_dir" <<'PY'
@@ -80,16 +69,10 @@ path = Path(sys.argv[1])
 results = json.loads((path / 'results.json').read_text())
 replay = json.loads((path / 'episode.replay').read_text())
 log = (path / 'game.log').read_text()
-usage = [tuple(map(int, match)) for match in re.findall(
-    r'input_tokens (\d+) output_tokens (\d+)',
-    (path / 'player0.log').read_text())]
 print(json.dumps({
     'artifacts': str(path), 'score': results['scores'][0],
     'gifts_sent': results['gifts_sent'][0],
     'tokens_given': results['tokens_given'][0],
-    'jev_calls': len(usage),
-    'input_tokens': sum(item[0] for item in usage),
-    'output_tokens': sum(item[1] for item in usage),
     'fallbacks': int(re.search(r'fallbacks=(\d+)', log).group(1)),
     'seat0_external_orders': sum(event['source'] == 'external'
         for event in replay['events'] if event.get('k') == 'order'
