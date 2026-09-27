@@ -38,11 +38,9 @@ coworld upload-policy coworld-gift-refinements:latest \
 `PLAYER_SCRIPTED=reciprocator|hoarder` fields a published baseline instead. A seat
 that sets neither plays `reciprocator`.
 
-`PLAYER_JEV=1` runs System One in the player container. It ranks ordinary
-collect, hold, evade, meet, and gift orders from that seat's observation. The
-game validates and applies the selected order through its normal action path.
-The policy can use the Bedrock sidecar, Observatory capture, or a direct
-TypeSafe key. Without a transport, the seat plays `reciprocator`.
+External players receive seat-private observations and submit ordinary collect,
+hold, evade, meet, and gift orders. The game validates them through its normal
+action path and uses `reciprocator` when an action is missing or invalid.
 
 Once per round (60 ticks), the game sends external policies their seat-private
 observations and accepts ordinary standing orders. Prompt seats still share
@@ -118,12 +116,9 @@ nimby --global sync nimby.lock
 nim r --hints:off --path:src tests/test_sim.nim        # any one gate
 nim c -d:release --path:src -o:gift-refinements src/gift_refinements.nim
 
-# Matched local episodes with six real WebSocket players (one Jev seat).
-# Export TYPESAFE_API_KEY before the Jev commands:
-tools/local_episode.sh reciprocator 7
-tools/local_episode.sh jev 7
-tools/local_episode.sh reciprocator 7 hoarder
-tools/local_episode.sh jev 7 hoarder
+# Local episodes with six real WebSocket players:
+tools/local_episode.sh 7
+tools/local_episode.sh 7 hoarder
 ```
 
 `tests/test_baseline.nim` and `tests/test_feasibility.nim` play 144 and 576 whole
