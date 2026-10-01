@@ -217,7 +217,7 @@ block oneBatchCarriesEveryOpenSeat:
   for seat in open:
     let view = sim.seatView(seat)
     let request = client.requestFor(
-      systemPrompt(view, scene), userPrompt(view, scene, "be generous"))
+      systemPrompt(view, scene), userPrompt(view, scene, "be generous"), 0)
     batch.post(request.url, request.headers, request.body, $seat)
   check(batch.len == open.len,
     "the batch carries " & $batch.len & " requests for " & $open.len &
@@ -226,7 +226,7 @@ block oneBatchCarriesEveryOpenSeat:
   for seat in [1, 4]:
     let view = sim.seatView(seat)
     let request = client.requestFor(
-      systemPrompt(view, scene), userPrompt(view, scene, ""))
+      systemPrompt(view, scene), userPrompt(view, scene, ""), 0)
     retry.post(request.url, request.headers, request.body, $seat)
   check(retry.len == 2, "the retry batch must carry ONLY the failed seats")
   banner "one batch of six on round one; the retry batch carries only the failures"
