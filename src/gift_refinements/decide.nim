@@ -442,7 +442,7 @@ proc turn*(
       var user = userPrompt(view, scene, engine.seats[seat].prompt)
       if attempt > 0:
         user.add(RetryHint)
-      let request = engine.client.requestFor(systemPrompt(view, scene), user)
+      let request = engine.client.requestFor(systemPrompt(view, scene), user, seat)
       batch.post(request.url, request.headers, request.body, $seat)
     let started = getMonoTime()
     # curly hands the deadline to CURLOPT_TIMEOUT, whose granularity is WHOLE

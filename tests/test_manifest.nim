@@ -134,11 +134,8 @@ block secretsAndNamespaces:
   let game = manifest["game"]
   check(game["name"].getStr() == GameName,
     "game.name is " & game["name"].getStr() & ", expected " & GameName)
-  let uri = game["runnable"]["env"]["ANTHROPIC_API_KEY_URI"].getStr()
-  check(uri == "secret://coworld/" & GameName & "/anthropic_api_key",
-    "the secret URI is " & uri &
-    "; without game.name as the namespace upload-coworld 400s and every " &
-    "league episode silently plays scripted (hive / cooperative-hunting)")
+  doAssert game{"runnable"}{"env"}{"ANTHROPIC_API_KEY_URI"}.isNil,
+    "hosted LLM uses the platform sidecar without provider secrets"
   check(game["runnable"]["type"].getStr() == "game",
     "game.runnable.type must be \"game\" for the 0.1.42 upload contract")
   check(game.hasKey("owner"), "game.owner is required")
