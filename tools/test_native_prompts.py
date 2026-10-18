@@ -173,7 +173,7 @@ def main():
                 assert event["k"] == "order" and event["seat"] == seat and event["source"] == "fallback"
                 action = row["executed_action"]
                 assert all(action[key] == event[key] for key in ("job", "gift", "consume", "say", "notes"))
-                assert event["target"] == (action["target"] or "")
+                assert event["target"] == action["target"]
                 assert event in replay["events"]
             shifts = [row for row in records if row["event_type"] == "host_round"]
             assert len(shifts) == 12 and len(replay["frames"]) == 720
