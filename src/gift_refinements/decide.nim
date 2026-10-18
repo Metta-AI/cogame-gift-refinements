@@ -29,6 +29,8 @@ import std/[json, monotimes, os, strutils, times]
 
 import curly
 
+import ./prompts
+
 import ./sim_types, ./sim_config, ./sim, ./orders, ./scripted, ./llm
 
 type
@@ -43,6 +45,7 @@ type
     registered*: bool
 
   DecisionEngine* = object
+    selection*: PromptSelection
     client*: LlmClient
     seats*: array[SeatCount, SeatPolicy]
     lastBatchStart*: MonoTime
@@ -51,7 +54,8 @@ type
     fallbacks*: int
     llmOrders*: int
 
-proc initDecisionEngine*(sim: SimServer): DecisionEngine =
+proc initDecisionEngine*(sim: SimServer, selection: PromptSelection): DecisionEngine =
+  result.selection = selection
   result.client = newLlmClient(sim.config)
   for slot in 0 ..< SeatCount:
     result.seats[slot].baseline = blReciprocator
@@ -182,7 +186,7 @@ proc observationJson*(view: SeatView, scene: Scene): JsonNode =
     }
   }
 
-proc systemPrompt*(view: SeatView, scene: Scene): string =
+proc systemPrompt*(view: SeatView, scene: Scene, selection: PromptSelection): string =
   ## Composed per seat, per round. The gift rule is stated THREE times -- once
   ## as the rule, once as the rawest-first warning, once as the worked ladder --
   ## because that is the one rule everything else in this game hangs off.
@@ -190,8 +194,7 @@ proc systemPrompt*(view: SeatView, scene: Scene): string =
   var others: seq[string] = @[]
   for peer in view.peers:
     others.add(peer.alias)
-  result = """
-You are """ & aliasUpper & """, one of six cogs on a foundry floor.
+  result = selection.introduction(aliasUpper) & "\n" & """
 
 THE BOARD. A fixed """ & $scene.cols & " x " & $scene.rows & """ grid: a solid wall ring around
 the outside, """ & $((scene.walls.len - 2 * (scene.cols + scene.rows - 2)) div 4) & """ two-by-two stone pillars inside it, and """ & $scene.pads.len & """ seep pads set into the
@@ -442,7 +445,7 @@ proc turn*(
       var user = userPrompt(view, scene, engine.seats[seat].prompt)
       if attempt > 0:
         user.add(RetryHint)
-      let request = engine.client.requestFor(systemPrompt(view, scene), user, seat)
+      let request = engine.client.requestFor(systemPrompt(view, scene, engine.selection), user, seat)
       batch.post(request.url, request.headers, request.body, $seat)
     let started = getMonoTime()
     # curly hands the deadline to CURLOPT_TIMEOUT, whose granularity is WHOLE

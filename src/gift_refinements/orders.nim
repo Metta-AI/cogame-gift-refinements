@@ -211,3 +211,9 @@ proc parseOrder*(
 
 proc targetAlias*(order: Order, aliases: openArray[string]): string =
   if order.target < 0 or order.target >= aliases.len: "" else: aliases[order.target]
+
+proc orderJson*(order: Order, aliases: openArray[string]): JsonNode =
+  %*{"job": $order.job,
+    "target": (if order.target < 0: newJNull() else: %aliases[order.target]),
+    "gift": order.gift, "consume": $order.consume,
+    "say": order.say, "notes": order.notes}

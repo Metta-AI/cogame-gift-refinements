@@ -1,3 +1,4 @@
+import ./prompts
 ## The game container: routes, the lobby, the round loop and the settle.
 ##
 ## A fork of `coworld-ctf/src/ctf/server.nim`'s route/artifact/shutdown
@@ -354,7 +355,7 @@ proc runEpisode*(
   for slot in 0 ..< SeatCount:
     if slot < config.players.len and config.players[slot].name.len > 0:
       sim.policyNames[slot] = config.players[slot].name
-  var engine = initDecisionEngine(sim)
+  var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)))
   var tracker = initBroadcastTracker()
 
   initAppState(config)
