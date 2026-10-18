@@ -29,7 +29,7 @@ import std/[json, monotimes, os, strutils, times]
 
 import curly
 
-import ./prompts
+import ./prompts, ./evidence
 
 import ./sim_types, ./sim_config, ./sim, ./orders, ./scripted, ./llm
 
@@ -45,6 +45,8 @@ type
     registered*: bool
 
   DecisionEngine* = object
+    attemptIds*: array[SeatCount, seq[string]]
+    selectedAttemptIds*: array[SeatCount, string]
     selection*: PromptSelection
     client*: LlmClient
     seats*: array[SeatCount, SeatPolicy]
@@ -374,6 +376,9 @@ proc turn*(
   ## k+1 (the sidecar's window may have rolled), so the flag is cleared here
   ## and only suppresses this round's retry.
   engine.client.throttled = false
+  engine.attemptIds = default(array[SeatCount, seq[string]])
+  engine.selectedAttemptIds = default(array[SeatCount, string])
+  let destination = getEnv("GIFT_REFINEMENTS_ATTEMPT_TRACE_DIR")
 
   # --- budget guard: settle EARLY rather than overrun -----------------------
   if not engine.llmOff:
@@ -445,7 +450,20 @@ proc turn*(
       var user = userPrompt(view, scene, engine.seats[seat].prompt)
       if attempt > 0:
         user.add(RetryHint)
-      let request = engine.client.requestFor(systemPrompt(view, scene, engine.selection), user, seat)
+      let system = systemPrompt(view, scene, engine.selection)
+      let request = engine.client.requestFor(system, user, seat)
+      let identity = $roundIndex & "-" & $seat & "-" & $attempt
+      engine.attemptIds[seat].add(identity)
+      if destination.len > 0:
+        writePrivate(destination / (identity & ".jsonl"), $(%*{
+          "event_type": "attempt_started", "attempt_id": identity, "visibility": "private",
+          "source_revision": getEnv("GIFT_REFINEMENTS_SOURCE_REVISION"),
+          "seat": seat, "round": roundIndex, "retry": attempt,
+          "scenario_family": scenarioFamily(sim.config),
+          "prompt": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+          "prompt_template": engine.selection.promptMetadata(system, user),
+          "request": {"transport": $engine.client.transport, "model": request.model,
+            "body": parseJson(request.body)}}) & "\n")
       batch.post(request.url, request.headers, request.body, $seat)
     let started = getMonoTime()
     # curly hands the deadline to CURLOPT_TIMEOUT, whose granularity is WHOLE
@@ -458,18 +476,26 @@ proc turn*(
     var stillOpen: seq[int] = @[]
     for position, seat in open:
       var cause = "parse_error"
+      var text, failure: string
+      var parsed, normalized = newJNull()
+      var selected = false
       try:
-        let text = engine.client.textOf(
+        text = engine.client.textOf(
           responses[position].response, responses[position].error,
           batch[position].url)
+        parsed = extractJsonObject(text)
         var order = parseOrder(
-          extractJsonObject(text), seat, scene.names,
+          parsed, seat, scene.names,
           sim.config.maxBeamsPerRound)
         order.source = if attempt == 0: osLlm else: osRetry
         order.latencyMs = latency
         sim.installOrder(seat, order)
+        normalized = orderJson(order, scene.names)
+        selected = true
+        engine.selectedAttemptIds[seat] = engine.attemptIds[seat][^1]
         engine.llmOrders += 1
       except CatchableError as error:
+        failure = error.msg
         if responses[position].error.len > 0:
           cause = (if "timeout" in responses[position].error.toLowerAscii():
                      "timeout" else: "transport_error")
@@ -482,6 +508,16 @@ proc turn*(
         echo LogPrefix, "seat ", seat, " attempt ", attempt + 1,
           " failed, falling back if it fails again: ", error.msg
         stillOpen.add(seat)
+      finally:
+        if destination.len > 0:
+          let identity = engine.attemptIds[seat][^1]
+          appendPrivate(destination / (identity & ".jsonl"), %*{
+            "event_type": "attempt_finished", "attempt_id": identity,
+            "raw_response": responses[position].response.body, "response": text,
+            "failure": failure, "parsed_action": parsed, "normalized_action": normalized,
+            "selected": selected, "latency_ms": latency,
+            "http_status": responses[position].response.code, "transport_error": responses[position].error,
+            "platform_call_id": newJNull(), "behavior_logprobs": newJNull()})
     open = stillOpen
     inc attempt
     if engine.client.throttled and open.len > 0:

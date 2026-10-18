@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = Path(sys.argv[1]).resolve()
-ORIGINAL = Path(sys.argv[2]).resolve()
+COMPARE_ORIGINAL = len(sys.argv) == 3
 VARIANTS = ("refinery", "scarce", "long-beam", "open-floor")
 WORDINGS = ("canonical", "plain", "numbered", "questions", "reordered", "heldout-briefing", "heldout-reference")
 
@@ -86,9 +86,10 @@ def play(binary, variant, seed, wording="canonical", prompt_seed=0, text=True, o
 
 families = set()
 for variant in VARIANTS:
-    original = play(ORIGINAL, variant, 17, text=False, original=True)
     numeric = play(BRIDGE, variant, 17, text=False)
-    assert numeric[:3] == original[:3]
+    if COMPARE_ORIGINAL:
+        original = play(Path(sys.argv[2]).resolve(), variant, 17, text=False, original=True)
+        assert numeric[:3] == original[:3]
     families.update(numeric[3])
     canonical = play(BRIDGE, variant, 17)
     assert canonical == play(BRIDGE, variant, 99), "seed labels must not claim different scenarios"

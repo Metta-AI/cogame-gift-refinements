@@ -9,18 +9,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = Path(sys.argv[1]).resolve()
-ORIGINAL = Path(sys.argv[2]).resolve()
+COMPARE_ORIGINAL = len(sys.argv) == 3
 OUTPUT = Path(tempfile.mkdtemp(prefix="gift-source-export-"))
 revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 families = set()
 for variant in ("refinery", "scarce", "long-beam", "open-floor"):
-    original = OUTPUT / ("original-" + variant)
-    subprocess.run([str(ORIGINAL), str(original), "10", "1", variant], cwd=ROOT, check=True, timeout=600)
-    reference = {}
-    for split in ("train", "validation"):
-        for line in (original / (split + ".jsonl")).read_text().splitlines():
-            row = json.loads(line)
-            reference[row["episode_id"], row["decision_id"]] = row
+    if COMPARE_ORIGINAL:
+        original = OUTPUT / ("original-" + variant)
+        subprocess.run(
+            [str(Path(sys.argv[2]).resolve()), str(original), "10", "1", variant], cwd=ROOT, check=True, timeout=600
+        )
+        reference = {}
+        for split in ("train", "validation"):
+            for line in (original / (split + ".jsonl")).read_text().splitlines():
+                row = json.loads(line)
+                reference[row["episode_id"], row["decision_id"]] = row
     output = OUTPUT / variant
     subprocess.run([str(EXPORTER), str(output), "10", "1", variant], cwd=ROOT, check=True, timeout=600)
     episodes, decisions, execution = {}, {}, {}
@@ -58,9 +61,10 @@ for variant in ("refinery", "scarce", "long-beam", "open-floor"):
         rows = decisions[identity]
         assert len(rows) == 72 and len(execution[identity]) == 12
         for index, row in enumerate(rows):
-            old = reference[f"gift-refinements-{variant}-{seed}", index]
-            assert row["attempts"][0]["prompt"] == old["prompt"]
-            assert row["executed_action"] == json.loads(old["completion"][0]["content"])
+            if COMPARE_ORIGINAL:
+                old = reference[f"gift-refinements-{variant}-{seed}", index]
+                assert row["attempts"][0]["prompt"] == old["prompt"]
+                assert row["executed_action"] == json.loads(old["completion"][0]["content"])
             assert row["observation"]["scenario_family"] == episode["seed_family"]
         frames = []
         for index, turn in enumerate(execution[identity]):
@@ -91,7 +95,8 @@ for variant in ("refinery", "scarce", "long-beam", "open-floor"):
     families.update(selected)
     print(
         variant,
-        "ten original comparisons and candidate executions; one physical scenario across ten seeds PASS",
+        "ten candidate executions; one physical scenario across ten seeds PASS; original comparison:",
+        COMPARE_ORIGINAL,
         flush=True,
     )
 assert len(families) == 4

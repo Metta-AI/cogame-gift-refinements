@@ -40,11 +40,23 @@ mode `0600`.
 These are candidates requiring independent review. No train/validation labels are produced automatically. Held-out
 wording is rejected for candidate export. Preserve physical scenario families during review and downstream splitting.
 
+## Native request and execution evidence
+
+Set `GIFT_REFINEMENTS_SOURCE_REVISION` to the qualified source revision. Set `GIFT_REFINEMENTS_ATTEMPT_TRACE_DIR` and
+`GIFT_REFINEMENTS_HOST_TRACE_PATH` on the game host to private output locations. Capture is opt-in; files use mode
+`0600` and must not already exist. Actual request bodies, model identity, exact prompts/hashes, raw responses, parsing
+outcomes, and retries are recorded. Credentials and request headers are excluded.
+
+Host evidence retains observations before decisions, selected attempt IDs, external proposals, installed orders, kernel
+actions, frame/event sequences, settlement events, and final outcomes. Host reference prompts are never presented as
+external-player inference. Absent provider call IDs and behavior log probabilities remain null. Public replay and other
+players' observations do not receive operator prompts or template metadata.
+
 ## Validation and evaluation
 
-`tools/test_prompt_games.py BRIDGE ORIGINAL_BRIDGE` plays complete wording panels, checks original numeric behavior and
-exact canonical prompts, and verifies private notes, spectator-only speech, normalization, and inert seed behavior.
-`tools/test_export_posttrain.py EXPORTER ORIGINAL_EXPORTER` compares complete candidate games with original canonical
+`tools/test_prompt_games.py BRIDGE [ORIGINAL_BRIDGE]` plays complete wording panels, checks original numeric behavior
+and exact canonical prompts, and verifies private notes, spectator-only speech, normalization, and inert seed behavior.
+`tools/test_export_posttrain.py EXPORTER [ORIGINAL_EXPORTER]` compares complete candidate games with original canonical
 exports and checks physical frames across seed replicas.
 
 Compare base, canonical-trained, and mixed-trained policies on frozen scenario/wording panels with the same seat
@@ -70,3 +82,9 @@ board positions and scores, gifts, bank events, and own history. Other seats' in
 hidden. Even seats use the published reciprocator teacher; odd seats use the hoarder. Decisions stay frozen until all
 six seats submit their round orders. The numeric policy sends no spectator text or private notes; the post-training
 exporter retains them.
+
+`tools/test_native_prompts.py GAME PLAYER OUTPUT` runs all four canonical variants and seven additional wording cases
+with six real native players and a reserved closed inference endpoint. Each published game keeps 12 rounds and 720
+ticks. It verifies 144 actual failed requests, 72 installed fallbacks, exact prompt hashes, and replay joins. `--smoke`
+runs two full canonical variants. These checks exercise transport failures; they do not measure provider inference
+quality.

@@ -1,4 +1,4 @@
-import ./prompts
+import ./prompts, ./evidence
 ## The game container: routes, the lobby, the round loop and the settle.
 ##
 ## A fork of `coworld-ctf/src/ctf/server.nim`'s route/artifact/shutdown
@@ -356,6 +356,12 @@ proc runEpisode*(
     if slot < config.players.len and config.players[slot].name.len > 0:
       sim.policyNames[slot] = config.players[slot].name
   var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)))
+  let tracePath = getEnv("GIFT_REFINEMENTS_HOST_TRACE_PATH")
+  if tracePath.len > 0:
+    writePrivate(tracePath, $(%*{"event_type": "host_started", "visibility": "private",
+      "source_revision": getEnv("GIFT_REFINEMENTS_SOURCE_REVISION"), "seed": config.seed,
+      "scenario_family": scenarioFamily(config),
+      "prompt_selection": engine.selection.selectionMetadata()}) & "\n")
   var tracker = initBroadcastTracker()
 
   initAppState(config)
@@ -408,6 +414,19 @@ proc runEpisode*(
           roundIndex, "; settling early"
         reason = erDeadline
         break
+      var observations, prompts, metadata: array[SeatCount, JsonNode]
+      var proposals: array[SeatCount, JsonNode]
+      if tracePath.len > 0:
+        for seat in 0 ..< SeatCount:
+          observations[seat] = observationJson(sim.seatView(seat), sim.scene())
+          prompts[seat] = newJNull()
+          metadata[seat] = newJNull()
+          proposals[seat] = newJNull()
+          if engine.seats[seat].isLlm:
+            let system = systemPrompt(sim.seatView(seat), sim.scene(), engine.selection)
+            let user = userPrompt(sim.seatView(seat), sim.scene(), engine.seats[seat].prompt)
+            prompts[seat] = %*[{"role": "system", "content": system}, {"role": "user", "content": user}]
+            metadata[seat] = engine.selection.promptMetadata(system, user)
       var decisionId: int
       let decisionStart = getMonoTime()
       {.gcsafe.}:
@@ -440,6 +459,8 @@ proc runEpisode*(
           {.gcsafe.}:
             withLock appState.lock:
               action = appState.pendingActions[slot]
+          if tracePath.len > 0:
+            proposals[slot] = if action.isNil: newJNull() else: action
           if not action.isNil:
             var order = parseOrder(action, slot, sim.aliases,
               sim.config.maxBeamsPerRound)
@@ -449,6 +470,8 @@ proc runEpisode*(
       let elapsed = (getMonoTime() - decisionStart).inMilliseconds.int
       if config.minTurnSeconds * 1000 > elapsed:
         sleep(config.minTurnSeconds * 1000 - elapsed)
+      let eventStart = sim.events.len
+      let startTick = sim.tick
       for slot in 0 ..< SeatCount:
         let order = sim.orders[slot]
         sim.events.add(GiftEvent(
@@ -458,16 +481,45 @@ proc runEpisode*(
           gift: order.gift, consume: $order.consume, clamped: order.clamped,
           source: $order.source, say: order.say, notes: order.notes,
           latencyMs: order.latencyMs))
+      if tracePath.len > 0:
+        for seat in 0 ..< SeatCount:
+          let order = sim.orders[seat]
+          let selected = order.source in {osLlm, osRetry} and engine.selectedAttemptIds[seat].len > 0
+          appendPrivate(tracePath, %*{
+            "event_type": "host_decision", "visibility": "private",
+            "seat": seat, "round": roundIndex, "observation": observations[seat],
+            "prompt": prompts[seat], "prompt_template": metadata[seat],
+            "scenario_family": scenarioFamily(config),
+            "external_proposal": proposals[seat], "executed_action": orderJson(order, sim.aliases),
+            "source": $order.source, "external": engine.seats[seat].isExternal,
+            "attempt_ids": engine.attemptIds[seat],
+            "selected_attempt_id": (if selected: %engine.selectedAttemptIds[seat] else: newJNull()),
+            "order_event": sim.events[eventStart + seat].jsonRow()})
       for slot in seated:
         sendSeat(slot, observationJson(sim.seatView(slot), sim.scene()))
+      var appliedActions = newJArray()
       for tickInRound in 0 ..< config.ticksPerRound:
-        sim.stepWithKernel()
+        let applied = sim.stepWithKernel()
+        if tracePath.len > 0:
+          var actions = newJArray()
+          for action in applied: actions.add(%($action))
+          appliedActions.add(actions)
         let liveEvents = eventsJson(sim.liveEvents)
         for event in liveEvents:
           tracker.ingest(event)
         broadcastFrame(sim, tracker, liveEvents, nil)
       sim.closeRound()
+      if tracePath.len > 0:
+        var frames, events = newJArray()
+        for tick in startTick ..< sim.tick: frames.add(%sim.frames[tick])
+        for index in eventStart ..< sim.events.len: events.add(sim.events[index].jsonRow())
+        appendPrivate(tracePath, %*{
+          "event_type": "host_round", "visibility": "private", "round": roundIndex,
+          "start_tick": startTick, "end_tick": sim.tick, "event_start": eventStart,
+          "event_end": sim.events.len, "events": events, "kernel_actions": appliedActions,
+          "frames": frames, "terminal": sim.round == config.rounds})
 
+  let finalEventStart = sim.events.len
   if reason == erDeadline or (reason == erComplete and sim.round < config.rounds):
     # Settle: autobank whatever is still held so the rounds actually played are
     # scored honestly. The rows land on the last tick the replay carries --
@@ -478,6 +530,12 @@ proc runEpisode*(
 
   # --- shutdown, in this order ---------------------------------------------
   let results = sim.resultsJson()
+  if tracePath.len > 0:
+    var finalEvents = newJArray()
+    for index in finalEventStart ..< sim.events.len: finalEvents.add(sim.events[index].jsonRow())
+    appendPrivate(tracePath, %*{"event_type": "host_finished", "results": results,
+      "event_start": finalEventStart, "events": finalEvents,
+      "final_frame": (if sim.frames.len == 0: newJNull() else: %sim.frames[^1])})
   let over = overJson(sim.scene(), results, tracker, max(0, sim.tick - 1))
   # The note's §Server: the `state` frame goes out at every round boundary AND
   # at episode end (r1 review F13). A seat that keeps its own book of the match
