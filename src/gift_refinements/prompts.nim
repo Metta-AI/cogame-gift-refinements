@@ -18,7 +18,7 @@ type
     seed*: int
 
 const
-  PromptBankVersion* = "gift-refinements-rules-v1"
+  PromptBankVersion* = "gift-refinements-rules-v2"
 
 proc promptSelection*(node: JsonNode): PromptSelection =
   if node.kind != JObject:

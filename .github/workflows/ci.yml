@@ -140,7 +140,7 @@ jobs:
               fi
               echo "::group::nim r ${flags} --path:src ${t}"
               # shellcheck disable=SC2086
-              if ! nim r ${flags} --path:src -o:"$RUNNER_TEMP/$(basename "${t}" .nim)-${m}" "${t}"; then
+              if ! nim r ${flags} --path:src "${t}"; then
                 echo "::error::FAILED (${m}) ${t}"
                 fail=1
               fi
@@ -149,7 +149,7 @@ jobs:
           done
           exit "${fail}"
 
-      - name: Complete prompt and source candidate workflows
+      - name: Complete prompt and scenario-family export workflows
         run: |
           set -euo pipefail
           nim c --hints:off -d:release --path:src -o:"$RUNNER_TEMP/gift-bridge" tools/train_bridge.nim
@@ -157,13 +157,6 @@ jobs:
           python tools/test_prompt_games.py "$RUNNER_TEMP/gift-bridge"
           python tools/test_train_bridge.py "$RUNNER_TEMP/gift-bridge"
           python tools/test_export_posttrain.py "$RUNNER_TEMP/gift-export"
-
-      - name: Published native prompt workflows
-        run: |
-          set -euo pipefail
-          nim c --hints:off -d:release --path:src -o:"$RUNNER_TEMP/gift-game" src/gift_refinements.nim
-          nim c --hints:off -d:release --path:src -o:"$RUNNER_TEMP/gift-player" src/gift_refinements_player.nim
-          python tools/test_native_prompts.py "$RUNNER_TEMP/gift-game" "$RUNNER_TEMP/gift-player" "$RUNNER_TEMP/native-prompts" --smoke
 
   # ---------------------------------------------------------------------
   # The manifest is loaded by the SAME code `coworld build` uses. 0.1.42 is

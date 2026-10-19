@@ -140,10 +140,8 @@ proc newLlmClient*(config: GameConfig): LlmClient =
 
 proc requestFor*(
   client: LlmClient, system, user: string, slot: int
-): tuple[url: string, headers: HttpHeaders, body: string, model: string] =
+): tuple[url: string, headers: HttpHeaders, body: string] =
   ## One Messages-API request, shaped for whichever transport is live.
-  result.model = if client.transport == ltBedrock:
-    client.bedrockModels[client.bedrockModel] else: client.model
   var body = %*{
     "max_tokens": client.maxOutputTokens,
     "system": system,
@@ -159,11 +157,11 @@ proc requestFor*(
       headers["authorization"] = "Bearer " & client.bedrockToken
     result.url = client.bedrockUrl()
   elif client.transport == ltSidecar:
-    body["model"] = %result.model
+    body["model"] = %client.model
     headers["anthropic-version"] = AnthropicVersion
     result.url = client.sidecarEndpoint & "/v1/messages"
   else:
-    body["model"] = %result.model
+    body["model"] = %client.model
     ## Only the Claude 5 / Opus tiers accept an effort setting; Haiku 4.5
     ## rejects the whole request with a 400 if it is present.
     if "haiku" notin client.model and "4-5" notin client.model:

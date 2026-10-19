@@ -204,8 +204,8 @@ proc kernelActions*(sim: SimServer): array[SeatCount, Action] =
   for slot in 0 ..< SeatCount:
     result[slot] = sim.kernelAction(slot)
 
-proc stepWithKernel*(sim: var SimServer): array[SeatCount, Action] {.discardable.} =
+proc stepWithKernel*(sim: var SimServer) =
   ## One whole tick: derive every cog's action from its standing order, then
   ## resolve. This is the only entry point the server and the tests use.
-  result = sim.kernelActions()
-  sim.step(result)
+  let actions = sim.kernelActions()
+  sim.step(actions)
