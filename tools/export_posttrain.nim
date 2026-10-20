@@ -77,7 +77,8 @@ when isMainModule:
         let system = systemPrompt(view, scene, selection)
         let user = userPrompt(view, scene, OperatorPrompt)
         rows.add($(%*{
-          "episode_id": "gift-refinements-" & variant & "-" & $seed,
+          "episode_id": "gift-refinements-" & variant & "-" & $seed &
+            "-" & $selection.selectedVariant & "-" & $selection.seed,
           "seed": family,
           "prompt_template": selection.promptMetadata(system, user),
           "decision_id": rows.len,
