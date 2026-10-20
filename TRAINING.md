@@ -56,3 +56,6 @@ physical configurations, policies, seats, and inference settings. Report score,
 invalid-order rate, fallback rate, requests, and completion for familiar and
 held-out wording. Four published physical scenarios are limited coverage;
 local checks do not establish learned robustness.
+
+Held-out bridge wordings require an explicit `evaluation`, `validation`, or `test`
+split. Omitted, training, and unrecognized splits reject them.

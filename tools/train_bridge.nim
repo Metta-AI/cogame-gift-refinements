@@ -134,9 +134,9 @@ when isMainModule:
     of "reset":
       doAssert request["players"].getInt() == SeatCount
       selection = promptSelection(request)
-      if request.hasKey("split") and request["split"].getStr() == "train" and
-          selection.selectedVariant in {pvHeldoutBriefing, pvHeldoutReference}:
-        raise newException(ValueError, "held-out wording cannot be used for training")
+      if selection.selectedVariant in {pvHeldoutBriefing, pvHeldoutReference} and
+          (not request.hasKey("split") or request["split"].getStr() notin ["evaluation", "validation", "test"]):
+        raise newException(ValueError, "held-out wording requires an explicit evaluation split")
       var config = defaultGameConfig()
       let runtimeConfig = copy(variantConfig)
       runtimeConfig["tokens"] = %*["t0", "t1", "t2", "t3", "t4", "t5"]
