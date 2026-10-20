@@ -40,7 +40,7 @@ The optional final split defaults to `train`; the other dataset file is empty.
 Choose different physical configurations for validation, as shown above.
 Seed labels cannot create held-out scenarios. Mixed selection cycles across
 five wordings, recording message hashes, each run's selection, and scenario family.
-Episode IDs include the selected wording and prompt seed; scenario-family IDs do not.
+Episode IDs include requested selection, resolved wording, and prompt seed; scenario-family IDs do not.
 The original reciprocator/hoarder roster and simultaneous standing orders remain.
 
 ## Validation and experiments
