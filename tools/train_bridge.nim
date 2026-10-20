@@ -2,6 +2,7 @@
 ## nim c -d:release --path:src -o:gift-train-bridge tools/train_bridge.nim
 
 import std/[json, os]
+import gift_refinements/prompts
 import gift_refinements/[sim_types, sim_config, sim, orders, scripted, decide,
   events, kernel]
 
@@ -13,18 +14,23 @@ proc seedOf(value: string): int =
     hash = (hash xor uint32(ord(ch))) * 16777619'u32
   int(hash and 0x7fffffff'u32)
 
-proc decision(game: SimServer, seat, id: int): JsonNode =
+proc decision(game: SimServer, seat, id: int, selection: PromptSelection): JsonNode =
   let view = game.seatView(seat)
   let scene = game.scene()
+  let system = systemPrompt(view, scene, selection)
+  let user = userPrompt(view, scene, OperatorPrompt)
+  var observation = observationJson(view, scene)
+  observation["prompt_template"] = selection.promptMetadata(system, user)
+  observation["scenario_family"] = %scenarioFamily(game.config)
   %*{
     "kind": "decision", "game": "gift-refinements",
     "decision_id": id, "seat": seat, "engine_seat": seat,
     "turn": game.round,
-    "semantic_view": observationJson(view, scene),
+    "semantic_view": observation,
     "inbox": [],
     "messages": [
-      {"role": "system", "content": systemPrompt(view, scene)},
-      {"role": "user", "content": userPrompt(view, scene, OperatorPrompt)}
+      {"role": "system", "content": system},
+      {"role": "user", "content": user}
     ],
     "speech_messages": [],
     "action_schema": {"type": "object",
@@ -106,15 +112,18 @@ proc encoding(game: SimServer, seat, id: int): JsonNode =
 
 when isMainModule:
   let args = commandLineParams()
-  if args.len notin 1 .. 2:
-    quit("usage: gift-train-bridge MANIFEST [variant]", 1)
-  let variant = if args.len == 2: args[1] else: "refinery"
+  if args.len notin 1 .. 3:
+    quit("usage: gift-train-bridge MANIFEST [variant [text]]", 1)
+  let variant = if args.len >= 2: args[1] else: "refinery"
+  let textMode = args.len == 3
+  if textMode: doAssert args[2] == "text"
   let manifest = parseFile(args[0])
   var variantConfig: JsonNode
   for entry in manifest["variants"]:
     if entry["id"].getStr() == variant:
       variantConfig = entry["game_config"]
   doAssert not variantConfig.isNil, "unknown variant: " & variant
+  var selection: PromptSelection
   var game: SimServer
   var seat = 0
   var id = 0
@@ -124,6 +133,10 @@ when isMainModule:
     case request["kind"].getStr()
     of "reset":
       doAssert request["players"].getInt() == SeatCount
+      selection = promptSelection(request)
+      if selection.selectedVariant in {pvHeldoutBriefing, pvHeldoutReference} and
+          (not request.hasKey("split") or request["split"].getStr() notin ["evaluation", "validation", "test"]):
+        raise newException(ValueError, "held-out wording requires an explicit evaluation split")
       var config = defaultGameConfig()
       let runtimeConfig = copy(variantConfig)
       runtimeConfig["tokens"] = %*["t0", "t1", "t2", "t3", "t4", "t5"]
@@ -132,7 +145,7 @@ when isMainModule:
       game = initSimServer(config)
       seat = 0
       id = 0
-      response = game.decision(seat, id)
+      response = game.decision(seat, id, selection)
     of "encode":
       doAssert not game.finished
       response = game.encoding(seat, id)
@@ -144,19 +157,23 @@ when isMainModule:
         view, game.config.maxBeamsPerRound)
       let target = if order.target < 0:
         (if seat == 0: 1 else: 0) else: order.target
-      response = %*{"response": $(%*{
-        "job": $order.job, "target": game.aliases[target],
-        "gift": order.gift, "consume": $order.consume})}
+      if textMode:
+        response = %*{"response": $orderJson(order, game.aliases)}
+      else:
+        response = %*{"response": $(%*{
+          "job": $order.job, "target": game.aliases[target],
+          "gift": order.gift, "consume": $order.consume})}
     of "step":
       doAssert not game.finished and request["decision_id"].getInt() == id
       let action = parseJson(request["response"].getStr())
       var completion = copy(action)
-      completion["say"] = %""
-      completion["notes"] = %""
+      if not textMode:
+        completion["say"] = %""
+        completion["notes"] = %""
       var parsed = parseOrder(completion, seat, game.aliases,
         game.config.maxBeamsPerRound)
-      doAssert not parsed.clamped
-      if parsed.gift == 0 and parsed.job != jobMeet:
+      if not textMode: doAssert not parsed.clamped
+      if not textMode and parsed.gift == 0 and parsed.job != jobMeet:
         parsed.target = -1
       parsed.source = osScripted
       game.orders[seat] = parsed
@@ -165,7 +182,7 @@ when isMainModule:
         kind: evOrder, t: game.tick, seat: seat, round: game.round + 1,
         job: $parsed.job, target: parsed.targetAlias(game.aliases),
         gift: parsed.gift, consume: $parsed.consume, clamped: parsed.clamped,
-        source: $parsed.source, say: "", notes: ""))
+        source: $parsed.source, say: parsed.say, notes: parsed.notes))
       inc seat
       if seat == SeatCount:
         for tick in 0 ..< game.config.ticksPerRound:
@@ -183,8 +200,9 @@ when isMainModule:
           scores[$slot] = outcome["scores"][slot]
         observation = %*{"kind": "terminal", "scores": scores}
       else:
-        observation = game.decision(seat, id)
-      response = %*{"kind": "accepted", "action": action,
+        observation = game.decision(seat, id, selection)
+      let installed = if textMode: orderJson(parsed, game.aliases) else: action
+      response = %*{"kind": "accepted", "action": installed,
         "observation": observation}
     else:
       raise newException(ValueError, "unknown command: " & request["kind"].getStr())

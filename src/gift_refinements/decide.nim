@@ -29,6 +29,8 @@ import std/[json, monotimes, os, strutils, times]
 
 import curly
 
+import ./prompts
+
 import ./sim_types, ./sim_config, ./sim, ./orders, ./scripted, ./llm
 
 type
@@ -43,6 +45,7 @@ type
     registered*: bool
 
   DecisionEngine* = object
+    selection*: PromptSelection
     client*: LlmClient
     seats*: array[SeatCount, SeatPolicy]
     lastBatchStart*: MonoTime
@@ -51,7 +54,8 @@ type
     fallbacks*: int
     llmOrders*: int
 
-proc initDecisionEngine*(sim: SimServer): DecisionEngine =
+proc initDecisionEngine*(sim: SimServer, selection: PromptSelection): DecisionEngine =
+  result.selection = selection
   result.client = newLlmClient(sim.config)
   for slot in 0 ..< SeatCount:
     result.seats[slot].baseline = blReciprocator
@@ -182,7 +186,7 @@ proc observationJson*(view: SeatView, scene: Scene): JsonNode =
     }
   }
 
-proc systemPrompt*(view: SeatView, scene: Scene): string =
+proc systemPrompt*(view: SeatView, scene: Scene, selection: PromptSelection): string =
   ## Composed per seat, per round. The gift rule is stated THREE times -- once
   ## as the rule, once as the rawest-first warning, once as the worked ladder --
   ## because that is the one rule everything else in this game hangs off.
@@ -190,8 +194,7 @@ proc systemPrompt*(view: SeatView, scene: Scene): string =
   var others: seq[string] = @[]
   for peer in view.peers:
     others.add(peer.alias)
-  result = """
-You are """ & aliasUpper & """, one of six cogs on a foundry floor.
+  result = selection.introduction(aliasUpper) & "\n" & """
 
 THE BOARD. A fixed """ & $scene.cols & " x " & $scene.rows & """ grid: a solid wall ring around
 the outside, """ & $((scene.walls.len - 2 * (scene.cols + scene.rows - 2)) div 4) & """ two-by-two stone pillars inside it, and """ & $scene.pads.len & """ seep pads set into the
@@ -200,7 +203,10 @@ floor that slowly grow RAW tokens. Walls and pillars stop you walking and stop y
 TOKENS. A token has a level: raw (0), refined (1) or super (""" & $scene.maxLevel & """). You hold at most """ & $scene.invCap & """
 of each level; anything over that is lost.
 
-CONSUMING pays you +1 for EVERY token you hold, at every level, and empties your hands.
+"""
+  case selection.selectedVariant
+  of pvCanonical:
+    result.add("""CONSUMING pays you +1 for EVERY token you hold, at every level, and empties your hands.
 Refinement buys nothing at the till. It only multiplies HOW MANY tokens exist.
 
 GIFTING is a beam, range """ & $scene.beamRange & """ cells, straight north/east/south/west, blocked by walls,
@@ -215,7 +221,68 @@ pillars and other cogs. A beam that finds nobody costs you nothing.
      one token, which is how the two of you split the pile. One raw token, eight beams, nine
      points. And at every single step the holder can simply consume and walk behind a pillar.
 
-THE CLOSE. At the last tick of round """ & $scene.rounds & """, everything you still hold is banked automatically.
+""")
+  of pvPlain:
+    result.add("CONSUMING AND GIFTING. Consume to bank every held token for +1 point each and empty your " &
+      "hands. Token level does not change its cash-out value; refinement increases token count. A " &
+      "gift beam travels " & $scene.beamRange & " cells north, east, south, or west, blocked by walls, pillars, and " &
+      "other cogs. Missing costs nothing. A hit spends one token of your lowest held level and gives " &
+      "the recipient " & $scene.giftMultiplier & " at the next level; a super token transfers as one super. While any " &
+      "raw remains, every beam sends raw. To return refined stock, stop collecting and spend or bank " &
+      "raw first. Example: give one raw to produce three refined, then receive those three in " &
+      "separate beams to obtain nine super. Super beams transfer one token at a time to split the " &
+      "pile: eight beams turn the original raw into nine points. At every step, the holder may " &
+      "consume and leave behind a pillar.\n\n")
+  of pvNumbered:
+    result.add("CONSUMING AND GIFTING. 1. Cash-out: consume all held tokens, +1 each regardless of level, " &
+      "leaving empty hands. Refinement multiplies count, not per-token value.\n2. Beam geometry: range " &
+      "" & $scene.beamRange & ", straight N/E/S/W; walls, pillars, and cogs block it. A miss is free.\n3. Gift " &
+      "conversion: spend one lowest-level token; the hit cog receives " & $scene.giftMultiplier & " next-level tokens. " &
+      "Super transfers as one super.\n4. Raw priority: any raw stock forces raw gifts. Stop collecting " &
+      "and spend or bank it before returning refined stock.\n5. Ladder: one raw gift creates three " &
+      "refined; three return beams create nine super. Transfer supers singly to share: eight beams, " &
+      "nine points from one raw.\n6. Choice: the holder can consume and walk behind a pillar at any " &
+      "step.\n\n")
+  of pvQuestions:
+    result.add("CONSUMING AND GIFTING. What pays? Consuming every token you hold for +1 each, regardless of " &
+      "level; your hands become empty. Why refine? More tokens, not more value per token. How does a " &
+      "beam travel? Straight N/E/S/W up to " & $scene.beamRange & " cells; walls, pillars, and cogs block it. A miss " &
+      "costs nothing. What does a hit do? Spend one lowest-level token and give the recipient " &
+      "" & $scene.giftMultiplier & " next-level tokens; super passes through one-for-one. Can you send refined while " &
+      "holding raw? No. Stop collecting and spend or bank raw first. How does the ladder work? One " &
+      "raw becomes three refined at your partner; three return beams become nine super at you. " &
+      "Single-super beams split that pile: eight beams, nine points. Must the holder keep " &
+      "cooperating? No; they can consume and leave behind a pillar at every step.\n\n")
+  of pvReordered:
+    result.add("CONSUMING AND GIFTING. The holder may consume and walk behind a pillar at any step. " &
+      "Cooperation can turn one raw gift into three refined, then three return beams into nine super; " &
+      "single-super beams share the pile, totaling eight beams and nine points. Each gift spends your " &
+      "lowest held level: raw stock forces raw gifts, so stop collecting and bank or spend raw before " &
+      "returning refined. A hit gives the receiver " & $scene.giftMultiplier & " next-level tokens; a super instead " &
+      "passes as one super. Beams travel straight N/E/S/W up to " & $scene.beamRange & " cells, blocked by walls, " &
+      "pillars, and cogs; misses cost nothing. Consume to empty your hands and score +1 for every " &
+      "token, irrespective of level. Refinement multiplies quantity, never cash-out value per token.\n\n")
+  of pvHeldoutBriefing:
+    result.add("CONSUMING AND GIFTING. Build token quantity through gifts, then decide when to bank. Consuming " &
+      "empties your hands for +1 per held token at any level. A beam reaches " & $scene.beamRange & " cells along " &
+      "N/E/S/W until a wall, pillar, or cog blocks it; a miss spends nothing. A hit spends one " &
+      "lowest-held-level token, yielding " & $scene.giftMultiplier & " next-level tokens to its recipient, except that " &
+      "super passes one-for-one. Any raw stock takes priority; stop collecting and bank or spend raw " &
+      "before giving refined back. One raw sent to a partner becomes three refined; returning these " &
+      "separately creates nine super. Super transfers share that pile one at a time: eight beams " &
+      "yield nine points from one raw. The current holder may always consume and leave behind a " &
+      "pillar.\n\n")
+  of pvHeldoutReference:
+    result.add("CONSUMING AND GIFTING. Consume: all held tokens \u2192 +1 point each, hands empty, no level bonus. " &
+      "Refinement benefit: token quantity. Beam: " & $scene.beamRange & " cells, straight N/E/S/W, blocked by " &
+      "walls/pillars/cogs, free miss. Successful gift: one lowest-level token spent \u2192 " & $scene.giftMultiplier & " " &
+      "next-level tokens received; super \u2192 one super. Raw-first constraint: while holding raw, all " &
+      "beams send raw; stop collecting and bank/spend raw before returning refined. Ladder: one raw \u2192 " &
+      "three refined at partner \u2192 three return beams \u2192 nine super at you; single-super transfers " &
+      "split the pile, eight beams and nine points total. Cooperation: optional at every step; holder " &
+      "may consume and depart behind a pillar.\n\n")
+  of pvMixed: raise newException(ValueError, "mixed selection must resolve to a training wording")
+  result.add("""THE CLOSE. At the last tick of round """ & $scene.rounds & """, everything you still hold is banked automatically.
 
 HOW YOU PLAY. You do not steer tick by tick. Once per round you choose ONE standing order for
 the next """ & $scene.ticksPerRound & """ ticks and a deterministic kernel walks and beams it for you:
@@ -233,7 +300,8 @@ private to you and comes back to you next round; nobody else ever sees it.
 
 OUTPUT FORMAT: reply with ONLY one JSON object, nothing else - no analysis, no explanation, no
 markdown fences, no text before or after the object. Your reply must begin with the character {
-and end with }."""
+and end with }.""")
+
 
 proc userPrompt*(view: SeatView, scene: Scene, operatorPrompt: string): string =
   ## The observation rendered compactly, then the operator block, then a
@@ -442,7 +510,7 @@ proc turn*(
       var user = userPrompt(view, scene, engine.seats[seat].prompt)
       if attempt > 0:
         user.add(RetryHint)
-      let request = engine.client.requestFor(systemPrompt(view, scene), user, seat)
+      let request = engine.client.requestFor(systemPrompt(view, scene, engine.selection), user, seat)
       batch.post(request.url, request.headers, request.body, $seat)
     let started = getMonoTime()
     # curly hands the deadline to CURLOPT_TIMEOUT, whose granularity is WHOLE

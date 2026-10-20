@@ -17,6 +17,8 @@
 ##
 ## The player protocol is `gift-refinements.player.v2`, JSON text frames.
 
+import ./prompts
+
 import
   std/[json, locks, monotimes, os, strutils, tables, times]
 
@@ -354,7 +356,7 @@ proc runEpisode*(
   for slot in 0 ..< SeatCount:
     if slot < config.players.len and config.players[slot].name.len > 0:
       sim.policyNames[slot] = config.players[slot].name
-  var engine = initDecisionEngine(sim)
+  var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)))
   var tracker = initBroadcastTracker()
 
   initAppState(config)

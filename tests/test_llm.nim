@@ -1,3 +1,4 @@
+import gift_refinements/prompts
 ## The decision layer (design note "## Tests" item 7).
 ##
 ## The tolerant extractor, the reply schema's repair-vs-reject split, the
@@ -217,7 +218,7 @@ block oneBatchCarriesEveryOpenSeat:
   for seat in open:
     let view = sim.seatView(seat)
     let request = client.requestFor(
-      systemPrompt(view, scene), userPrompt(view, scene, "be generous"), 0)
+      systemPrompt(view, scene, PromptSelection()), userPrompt(view, scene, "be generous"), 0)
     batch.post(request.url, request.headers, request.body, $seat)
   check(batch.len == open.len,
     "the batch carries " & $batch.len & " requests for " & $open.len &
@@ -226,7 +227,7 @@ block oneBatchCarriesEveryOpenSeat:
   for seat in [1, 4]:
     let view = sim.seatView(seat)
     let request = client.requestFor(
-      systemPrompt(view, scene), userPrompt(view, scene, ""), 0)
+      systemPrompt(view, scene, PromptSelection()), userPrompt(view, scene, ""), 0)
     retry.post(request.url, request.headers, request.body, $seat)
   check(retry.len == 2, "the retry batch must carry ONLY the failed seats")
   banner "one batch of six on round one; the retry batch carries only the failures"
@@ -238,7 +239,7 @@ block offlineTurnFallsBackWithoutRaising:
   var config = defaultGameConfig()
   config.minTurnSeconds = 0
   var sim = initSimServer(config)
-  var engine = initDecisionEngine(sim)
+  var engine = initDecisionEngine(sim, PromptSelection())
   for seat in 0 ..< SeatCount:
     engine.seats[seat].registered = true
     if seat < 2:
@@ -277,7 +278,7 @@ block offlineTurnFallsBackWithoutRaising:
 block repairMissingOrdersLeavesNoTickUnactuated:
   var config = defaultGameConfig()
   var sim = initSimServer(config)
-  var engine = initDecisionEngine(sim)
+  var engine = initDecisionEngine(sim, PromptSelection())
   for seat in 0 ..< SeatCount:
     sim.haveOrder[seat] = false
   engine.repairMissingOrders(sim)
@@ -292,7 +293,7 @@ block promptsCarryTheContract:
   let
     view = sim.seatView(2)
     scene = sim.scene()
-    system = systemPrompt(view, scene)
+    system = systemPrompt(view, scene, PromptSelection())
     user = userPrompt(view, scene, "open with the nearest cog")
   check("must begin with the character {" in system,
     "the system prompt does not demand a leading brace (Bedrock/Haiku answers " &
