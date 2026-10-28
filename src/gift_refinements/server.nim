@@ -406,8 +406,13 @@ proc runEpisode*(
       sim.policyNames[slot] = config.players[slot].name
   let trajectoryUri = getEnv("COGAME_SAVE_TRAJECTORY_URI")
   var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)), trajectoryUri.len > 0)
-  let capture = if engine.captureEnabled: some(newMatchCapture(config))
-    else: none(MatchCapture)
+  var capture = none(MatchCapture)
+  if engine.captureEnabled:
+    try: capture = some(newMatchCapture(config))
+    except CatchableError as error:
+      # Optional private metadata faults must not change native play/public artifacts.
+      engine.captureEnabled = false
+      echo "gift-refinements: private capture initialization failed: ", safeDiagnostic(error.msg)
   var tracker = initBroadcastTracker()
 
   initAppState(config)

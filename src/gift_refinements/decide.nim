@@ -25,7 +25,7 @@
 ## kernel always has an order: this round's, else last round's, else
 ## `reciprocator`'s.
 
-import std/[base64, json, monotimes, options, os, strutils, tables, times, unicode]
+import std/[base64, json, math, monotimes, options, os, parsejson, streams, strutils, tables, times]
 
 import curly
 
@@ -61,6 +61,188 @@ type
     llmOrders*: int
     captureEnabled*: bool
     decisions*: array[SeatCount, RoundDecision]
+
+proc scalarUtf8*(text: string): bool =
+  ## RFC 3629: Nim's validateUtf8 alone permits encoded surrogate code points.
+  var index = 0
+  while index < text.len:
+    let first = ord(text[index])
+    var size = 1
+    if first <= 0x7f: discard
+    elif first in 0xc2 .. 0xdf: size = 2
+    elif first in 0xe0 .. 0xef: size = 3
+    elif first in 0xf0 .. 0xf4: size = 4
+    else: return false
+    if index + size > text.len: return false
+    for offset in 1 ..< size:
+      if ord(text[index + offset]) notin 0x80 .. 0xbf: return false
+    if size >= 3:
+      let second = ord(text[index + 1])
+      if first == 0xe0 and second < 0xa0 or first == 0xed and second > 0x9f or
+          first == 0xf0 and second < 0x90 or first == 0xf4 and second > 0x8f:
+        return false
+    index += size
+  true
+
+proc scalarJson*(node: JsonNode, depth = 0): bool =
+  if node == nil or depth > 64: return false
+  case node.kind
+  of JString: return scalarUtf8(node.getStr())
+  of JObject:
+    for key, value in node:
+      if not scalarUtf8(key) or not scalarJson(value, depth + 1): return false
+  of JArray:
+    for value in node:
+      if not scalarJson(value, depth + 1): return false
+  else: discard
+  true
+
+proc safeDiagnostic*(detail: string): string =
+  if scalarUtf8(detail): detail
+  else: "non-Unicode diagnostic bytes, base64=" & encode(detail)
+
+proc strictRawObject(text: string): JsonNode =
+  ## Reused from Garble's reviewed native-capture strictRawObject; native gameplay decoder is unchanged.
+  if not scalarUtf8(text): raise newException(ValueError, "raw JSON is not Unicode scalar UTF-8")
+  let first = text.find('{')
+  let last = text.rfind('}')
+  if first < 0 or last < first: raise newException(ValueError, "no raw JSON object")
+  let source = text[first .. last]
+  var quoted = false
+  var index = 0
+  while index < source.len:
+    let character = source[index]
+    if quoted:
+      if character == '\\':
+        inc index
+        if index >= source.len or source[index] notin {'"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'}:
+          raise newException(ValueError, "non-JSON string escape")
+        if source[index] == 'u':
+          for offset in 1 .. 4:
+            if index + offset >= source.len or source[index + offset] notin {'0'..'9', 'a'..'f', 'A'..'F'}:
+              raise newException(ValueError, "invalid Unicode escape")
+          index += 4
+      elif character == '"': quoted = false
+      elif ord(character) < 32: raise newException(ValueError, "unescaped control character")
+    elif character == '"': quoted = true
+    elif character == '/': raise newException(ValueError, "JSON comments are forbidden")
+    elif ord(character) < 32 and character notin {'\t', '\n', '\r'}:
+      raise newException(ValueError, "non-JSON whitespace")
+    inc index
+  if quoted: raise newException(ValueError, "unterminated JSON string")
+  var parser: JsonParser
+  parser.open(newStringStream(source), "private raw action")
+  defer: parser.close()
+  discard parser.getTok()
+  proc value(parser: var JsonParser, depth: int): JsonNode =
+    if depth > 32: raise newException(ValueError, "raw JSON depth bound exceeded")
+    case parser.tok
+    of tkCurlyLe:
+      result = newJObject()
+      discard parser.getTok()
+      if parser.tok == tkCurlyRi:
+        discard parser.getTok()
+        return
+      while true:
+        if parser.tok != tkString: raise newException(ValueError, "JSON object key required")
+        let key = parser.a
+        if not scalarUtf8(key): raise newException(ValueError, "non-Unicode decoded JSON key")
+        if result.hasKey(key): raise newException(ValueError, "duplicate JSON key: " & key)
+        discard parser.getTok()
+        parser.eat(tkColon)
+        result[key] = value(parser, depth + 1)
+        if parser.tok == tkCurlyRi:
+          discard parser.getTok()
+          break
+        parser.eat(tkComma)
+    of tkBracketLe:
+      result = newJArray()
+      discard parser.getTok()
+      if parser.tok == tkBracketRi:
+        discard parser.getTok()
+        return
+      while true:
+        result.add(value(parser, depth + 1))
+        if parser.tok == tkBracketRi:
+          discard parser.getTok()
+          break
+        parser.eat(tkComma)
+    of tkString:
+      if not scalarUtf8(parser.a): raise newException(ValueError, "non-Unicode decoded JSON string")
+      result = %parser.a
+      discard parser.getTok()
+    of tkInt, tkFloat:
+      let token = parser.a
+      # Enforce JSON number spelling independently of Nim's permissive lexer.
+      var cursor = 0
+      if token[cursor] == '-': inc cursor
+      if cursor >= token.len: raise newException(ValueError, "invalid JSON number")
+      if token[cursor] == '0': inc cursor
+      elif token[cursor] in {'1'..'9'}:
+        while cursor < token.len and token[cursor] in {'0'..'9'}: inc cursor
+      else: raise newException(ValueError, "invalid JSON number")
+      if cursor < token.len and token[cursor] == '.':
+        inc cursor
+        let start = cursor
+        while cursor < token.len and token[cursor] in {'0'..'9'}: inc cursor
+        if cursor == start: raise newException(ValueError, "invalid JSON fraction")
+      if cursor < token.len and token[cursor] in {'e', 'E'}:
+        inc cursor
+        if cursor < token.len and token[cursor] in {'+', '-'}: inc cursor
+        let start = cursor
+        while cursor < token.len and token[cursor] in {'0'..'9'}: inc cursor
+        if cursor == start: raise newException(ValueError, "invalid JSON exponent")
+      if cursor != token.len: raise newException(ValueError, "invalid JSON number")
+      if parser.tok == tkInt: result = %parseBiggestInt(token)
+      else:
+        let number = parseFloat(token)
+        if number.classify in {fcNan, fcInf, fcNegInf}:
+          raise newException(ValueError, "non-finite raw JSON number")
+        result = %number
+      discard parser.getTok()
+    of tkTrue, tkFalse:
+      result = %(parser.tok == tkTrue)
+      discard parser.getTok()
+    of tkNull:
+      result = newJNull()
+      discard parser.getTok()
+    else: raise newException(ValueError, "invalid raw JSON value")
+  result = value(parser, 0)
+  if parser.tok != tkEof or result.kind != JObject:
+    raise newException(ValueError, "one raw JSON object required")
+
+proc strictNativeObject(text: string): JsonNode =
+  ## Select exactly the first span the native extractor can parse, including its fallback.
+  ## A strict rejection of that span must never select a later object instead.
+  if not scalarUtf8(text): raise newException(ValueError, "non-Unicode native completion")
+  var depth = 0
+  var start = -1
+  var inString, escaped = false
+  for index, character in text:
+    if inString:
+      if escaped: escaped = false
+      elif character == '\\': escaped = true
+      elif character == '"': inString = false
+      continue
+    case character
+    of '"': inString = true
+    of '{':
+      if depth == 0: start = index
+      inc depth
+    of '}':
+      if depth > 0:
+        dec depth
+        if depth == 0 and start >= 0:
+          var native: JsonNode
+          try: native = parseJson(text[start .. index])
+          except CatchableError: start = -1
+          if native != nil: return strictRawObject(text[start .. index])
+    else: discard
+  let first = text.find('{')
+  let last = text.rfind('}')
+  if first < 0 or last <= first: raise newException(ValueError, "no native object span")
+  discard parseJson(text[first .. last])
+  strictRawObject(text[first .. last])
 
 proc suppliedFieldsEqual(raw, applied: JsonNode): bool =
   ## Framing is source-supported; field/type/value repairs are separate exclusions.
@@ -579,7 +761,7 @@ proc turn*(
         let response = responses[position].response
         if response.code >= 100 and response.code <= 599:
           evidence.httpStatus = some(response.code)
-        if validateUtf8(response.body) < 0: evidence.rawResponse = %response.body
+        if scalarUtf8(response.body): evidence.rawResponse = %response.body
         evidence.responseBodyB64 = some(encode(response.body))
         var headers = initTable[string, string]()
         for (key, value) in response.headers: headers[key] = value
@@ -598,14 +780,20 @@ proc turn*(
           responses[position].response, responses[position].error,
           batch[position].url)
         if engine.captureEnabled:
-          if validateUtf8(text) < 0: evidence.response = %text
+          if scalarUtf8(text): evidence.response = %text
           let payload = parseJson(responses[position].response.body)
-          if payload{"model"}.kind == JString: evidence.model = some(payload["model"].getStr())
-          if payload{"stop_reason"}.kind == JString: evidence.stopReason = some(payload["stop_reason"].getStr())
-          if payload{"usage", "input_tokens"}.kind == JInt:
-            evidence.inputTokens = some(payload["usage"]["input_tokens"].getInt())
-          if payload{"usage", "output_tokens"}.kind == JInt:
-            evidence.outputTokens = some(payload["usage"]["output_tokens"].getInt())
+          let reportedModel = payload{"model"}
+          let stopReason = payload{"stop_reason"}
+          let inputTokens = payload{"usage", "input_tokens"}
+          let outputTokens = payload{"usage", "output_tokens"}
+          if reportedModel != nil and reportedModel.kind == JString:
+            evidence.model = some(reportedModel.getStr())
+          if stopReason != nil and stopReason.kind == JString:
+            evidence.stopReason = some(stopReason.getStr())
+          if inputTokens != nil and inputTokens.kind == JInt and inputTokens.getInt() >= 0:
+            evidence.inputTokens = some(inputTokens.getInt())
+          if outputTokens != nil and outputTokens.kind == JInt and outputTokens.getInt() >= 0:
+            evidence.outputTokens = some(outputTokens.getInt())
         let generated = extractJsonObject(text)
         var order = parseOrder(
           generated, seat, scene.names,
@@ -615,13 +803,19 @@ proc turn*(
         sim.installOrder(seat, order)
         if engine.captureEnabled:
           evidence.parsedAction = order.orderJson(scene.names)
-          evidence.accepted = suppliedFieldsEqual(generated, evidence.parsedAction)
+          var strict = false
+          try: strict = scalarJson(generated) and strictNativeObject(text) == generated
+          except CatchableError: discard
+          evidence.accepted = strict and suppliedFieldsEqual(generated, evidence.parsedAction)
           if evidence.accepted:
             engine.decisions[seat].selectedAttemptId = some(evidence.attemptId)
             engine.decisions[seat].status = asAccepted
           else:
             # Capture admission only: native parsing and the installed order remain unchanged.
-            evidence.rejectionReason = some("native parser changed a supplied JSON field/type/value")
+            evidence.rejectionReason = some(if not scalarJson(generated):
+              "non-Unicode supplied JSON key/value; target excluded"
+              elif not strict: "strict JSON grammar/depth differs from native parsed object; target excluded"
+              else: "native parser changed a supplied JSON field/type/value")
             engine.decisions[seat].status = asRejected
         engine.llmOrders += 1
       except CatchableError as error:
@@ -637,8 +831,7 @@ proc turn*(
         echo LogPrefix, "seat ", seat, " attempt ", attempt + 1,
           " failed, falling back if it fails again: ", error.msg
         if engine.captureEnabled:
-          evidence.rejectionReason = some(if validateUtf8(error.msg) < 0: error.msg
-            else: "non-UTF8 failure detail; original response bytes retained")
+          evidence.rejectionReason = some(safeDiagnostic(error.msg))
         stillOpen.add(seat)
       if engine.captureEnabled: engine.decisions[seat].attempts.add(evidence)
     open = stillOpen

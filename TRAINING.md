@@ -100,3 +100,38 @@ views/requests, simultaneous orders, every control, native hash, replay frame an
 and throttled fallback. Every case also completes without capture, matching native frames, outcomes and all HTTP request
 bodies. `--expect-missing` proves the old source's missing artifact with the same complete sentinel game. These are
 runtime proofs, not genuine platform receipts, teacher approval or learning evidence.
+
+### Unicode integrity
+
+Private capture requires RFC 3629 UTF-8 scalar strings in decoded JSON keys and values as well as wire text. Native
+parsing, installed orders and kernel controls remain unchanged. If native bytes, a persistent private note, or received
+metadata cannot be serialized safely, capture preserves the entire original evidence JSON bytes in
+`invalid_native_evidence_json_b64`, records a visible capture error, clears attempts/selection/action, and rejects the
+training target. Actual scripted fallback keeps its fallback status. An affected episode is marked failed for capture;
+unsafe terminal outcomes are likewise preserved as base64. No replacement text becomes a label. Missing optional
+provider model/stop/usage metadata remains missing; configured route identity is retained, and negative token usage is
+not admitted. An invalid runtime identity disables optional capture with a diagnostic while native play continues.
+
+The retained system regression uses the real central decision engine, loopback HTTP, native parser, 120 kernel ticks,
+and private writer. It covers valid accented text/surrogate pairs, decoded bad keys, lone surrogates, invalid UTF-8,
+persistent next-request bytes, response headers/model metadata and absent optional metadata. It plays two rounds of the
+ordinary 12-round open-floor configuration with the unchanged 25-second batch-start floor, then explicitly settles
+through the native deadline path. It is a partial protocol proof, never a completed episode or teacher receipt.
+
+```sh
+python3 tools/ci/native_unicode_system.py --nim /path/to/nim-2.2.4/bin/nim \
+  --nimcache /tmp/unique-gift-unicode-cache --output /tmp/unique-gift-unicode-proof
+```
+
+The command reads the checkout's pinned `nim.cfg` paths, uses an explicit credential-free subprocess environment, and
+bounds compilation to 240 seconds and execution to 60 seconds/8 MiB with a 2 GiB disk floor. All requests stay on
+loopback; synthetic fixture usage and UUID call headers are not authenticated provider receipts.
+
+Capture also checks strict JSON grammar independently of the tolerant native parser. It selects exactly the first
+balanced object span that the native extractor can parse, including the extractor's existing fallback, then checks that
+same span for duplicate keys, comments, JSON whitespace/number spelling, finite numbers, scalar strings and a depth
+limit of 32. A strict rejection never skips to a later valid object. Supported fences/prose and omitted optional
+defaults remain eligible; native parsing, retry behavior, installed actions and clocks are unchanged. Grammar exclusions
+retain the entire original completion and applied action with no selected training target. Run the same partial system
+proof with `--grammar` for duplicate/conflicting keys, comments, numeric spelling, trailing commas, depth, whitespace
+and first-object selection controls. Responses the native parser already rejects still take its ordinary retry path.

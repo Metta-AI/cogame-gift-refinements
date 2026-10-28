@@ -506,7 +506,8 @@ def main():
         json.dumps(
             {
                 "local_sentinel_only": True,
-                "no_capture_all_cases_parity": not args.expect_missing,
+                "no_capture_all_cases_parity": not args.expect_missing
+                and not args.ordinary_clock,
                 "cases": result,
             },
             indent=2,
