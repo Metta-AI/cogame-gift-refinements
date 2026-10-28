@@ -356,9 +356,9 @@ proc runEpisode*(
   for slot in 0 ..< SeatCount:
     if slot < config.players.len and config.players[slot].name.len > 0:
       sim.policyNames[slot] = config.players[slot].name
-  var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)))
   let trajectoryUri = getEnv("COGAME_SAVE_TRAJECTORY_URI")
-  let capture = if trajectoryUri.len > 0: some(newMatchCapture(config))
+  var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)), trajectoryUri.len > 0)
+  let capture = if engine.captureEnabled: some(newMatchCapture(config))
     else: none(MatchCapture)
   var tracker = initBroadcastTracker()
 
@@ -466,9 +466,12 @@ proc runEpisode*(
       for slot in seated:
         sendSeat(slot, observationJson(sim.seatView(slot), sim.scene()))
       for tickInRound in 0 ..< config.ticksPerRound:
-        let actions = sim.kernelActions()
-        sim.step(actions)
-        if capture.isSome: capture.get().recordTick(actions, sim)
+        if engine.captureEnabled:
+          let actions = sim.kernelActions()
+          sim.step(actions)
+          capture.get().recordTick(actions, sim)
+        else:
+          sim.stepWithKernel()
         let liveEvents = eventsJson(sim.liveEvents)
         for event in liveEvents:
           tracker.ingest(event)

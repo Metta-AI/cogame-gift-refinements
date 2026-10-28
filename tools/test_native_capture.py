@@ -21,8 +21,8 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def run_case(game, player, output, mode, variant, missing=False):
-    root = output / mode
+def run_case(game, player, output, mode, variant, missing=False, capture=True):
+    root = output / (mode if capture else mode + "-no-capture")
     root.mkdir(mode=0o700)
     records = []
 
@@ -37,7 +37,7 @@ def run_case(game, player, output, mode, variant, missing=False):
             assert request["model"] == "local/capture-sentinel"
             assert self.headers["X-Coworld-Player-Slot"] == "0"
             number = len(records)
-            order = {
+            order: dict[str, object] = {
                 "job": "collect",
                 "target": None,
                 "gift": 0,
@@ -45,6 +45,8 @@ def run_case(game, player, output, mode, variant, missing=False):
                 "say": "",
                 "notes": "local sentinel only",
             }
+            if mode == "defaulted":
+                order = {"job": "collect"}
             if mode == "clamped":
                 order.update(gift=31, target="Bex")
             if mode == "truncated":
@@ -116,6 +118,8 @@ def run_case(game, player, output, mode, variant, missing=False):
         COWORLD_SOURCE_REVISION="local-source-fixture",
         COGAME_SAVE_TRAJECTORY_URI=(root / "trajectory.jsonl").as_uri(),
     )
+    if not capture:
+        env.pop("COGAME_SAVE_TRAJECTORY_URI")
     processes = []
     logs = []
     try:
@@ -178,7 +182,7 @@ def run_case(game, player, output, mode, variant, missing=False):
     assert results["reason"] == "complete" and results["rounds"] == 12
     assert len(replay["frames"]) == 720
     trajectory = root / "trajectory.jsonl"
-    if missing:
+    if missing or not capture:
         assert not trajectory.exists(), (
             "old source unexpectedly emitted private native capture"
         )
@@ -227,17 +231,49 @@ def run_case(game, player, output, mode, variant, missing=False):
             assert attempt["platform_call_id"] == record["call"]
             assert attempt["http_status"] == record["status"]
             assert attempt["provider_request_id"] == "local-sentinel-" + record["call"]
-            if attempt["accepted"]:
-                assert attempt["parsed_action"] == action
-                assert attempt["decoder"]["supplied_fields_unchanged"] == (
-                    mode not in {"normalized", "clamped", "truncated", "unknown"}
+            decoder_keys = {
+                "max_tokens",
+                "max_completion_tokens",
+                "temperature",
+                "top_p",
+                "top_k",
+                "output_config",
+                "seed",
+                "stop",
+                "stop_sequences",
+                "stop_regex",
+                "no_stop_trim",
+                "tool_choice",
+                "tools",
+                "thinking",
+                "reasoning",
+                "response_format",
+            }
+            assert attempt["decoder"] == {
+                k: v for k, v in record["request"].items() if k in decoder_keys
+            }
+            if mode in {"normalized", "clamped", "truncated", "unknown"}:
+                assert not attempt["accepted"] and attempt["parsed_action"] == action
+                assert (
+                    row["action_status"] == "rejected"
+                    and row["selected_attempt_id"] is None
                 )
-                exclusions += not attempt["decoder"]["supplied_fields_unchanged"]
+                assert "changed a supplied JSON" in attempt["rejection_reason"]
+                assert (
+                    native["source"] == "llm"
+                )  # gameplay still applies its ordinary native parser
+                exclusions += 1
+            elif attempt["accepted"]:
+                assert attempt["parsed_action"] == action
         if seat:
             assert not row["attempts"] and row["selected_attempt_id"] is None
     assert len(seen) == len(records) == (24 if mode == "retry" else 12)
     selected = [r for r in rows[:-1] if r["selected_attempt_id"]]
-    assert len(selected) == (0 if mode == "throttle" else 12)
+    assert len(selected) == (
+        0
+        if mode in {"throttle", "normalized", "clamped", "truncated", "unknown"}
+        else 12
+    )
     if mode == "throttle":
         assert sum(r["action_status"] == "fallback" for r in rows[:-1]) == 12
     return {
@@ -272,6 +308,7 @@ def main():
         else [
             ("success", "refinery"),
             ("fenced", "open-floor"),
+            ("defaulted", "refinery"),
             ("normalized", "refinery"),
             ("retry", "refinery"),
             ("throttle", "refinery"),
@@ -291,11 +328,47 @@ def main():
         )
         for mode, variant in modes
     ]
+    if not args.expect_missing:
+        for mode, variant in modes:
+            run_case(
+                args.game.resolve(),
+                args.player.resolve(),
+                output,
+                mode,
+                variant,
+                capture=False,
+            )
+            before = output / mode
+            after = output / (mode + "-no-capture")
+            assert json.loads((before / "results.json").read_text()) == json.loads(
+                (after / "results.json").read_text()
+            )
+            assert (
+                json.loads((before / "replay.json").read_text())["frames"]
+                == json.loads((after / "replay.json").read_text())["frames"]
+            )
+            enabled_requests = [
+                x["request"]
+                for x in json.loads((before / "sentinel-http.json").read_text())
+            ]
+            disabled_requests = [
+                x["request"]
+                for x in json.loads((after / "sentinel-http.json").read_text())
+            ]
+            assert enabled_requests == disabled_requests
     for file in output.rglob("*"):
         if file.is_file():
             file.chmod(0o600)
     (output / "proof.json").write_text(
-        json.dumps({"local_sentinel_only": True, "cases": result}, indent=2) + "\n"
+        json.dumps(
+            {
+                "local_sentinel_only": True,
+                "no_capture_all_cases_parity": not args.expect_missing,
+                "cases": result,
+            },
+            indent=2,
+        )
+        + "\n"
     )
     print(json.dumps({"output": str(output), "cases": result}, indent=2))
 

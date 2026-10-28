@@ -64,13 +64,17 @@ from the spectator replay.
 Every native model attempt retains its actual private prompt, Messages request, untouched response body (also lossless
 base64), received header map, platform call ID, provider request ID when returned, usage, retry/failure and selected
 parsed order. Parsed HTTP headers are retained; the transport does not expose original header octets. Missing transport
-metadata stays missing. Scripted/external seats have no model or teacher attempts. A disconnected or failed model round
-keeps its attempts and identifies the actual reciprocator fallback.
+metadata stays missing. With no private URI, capture observations, attempts and byte evidence are disabled and the
+original `stepWithKernel` path runs. Scripted/external seats have no model or teacher attempts. A disconnected or failed
+model round keeps its attempts and identifies the actual reciprocator fallback.
 
-Native `extractJsonObject` accepts fences/prose. `decoder.supplied_fields_unchanged` separately records whether every
-supplied JSON field, type, and value equals the applied canonical order. Consumers must exclude false values, missing
-receipt or stage evidence, rejected attempts and fallbacks; never replace the raw model response with normalized JSON.
-Engine acceptance alone is not label eligibility.
+Native `extractJsonObject` accepts fences/prose. Capture separately requires every supplied JSON field, type, and value
+to equal the applied canonical order. A changed supplied value remains in the raw evidence with its canonical
+parsed/applied action, but its attempt is rejected, has no selected ID, and produces no generic-import target. This
+capture rejection changes no native gameplay and is not a fallback. Omitted optional native defaults remain eligible.
+Decoder evidence contains the actual request sampling settings, including `max_tokens`, with no invented defaults.
+Consumers must also exclude missing receipt/stage evidence and fallbacks; never replace raw responses with normalized
+JSON.
 
 The artifact is recorded after each complete native round, checks the issued order against the post-simulation order,
 and retains every seat's actual per-tick enum controls plus pre/post native hashes. `observation.execution.action_names`
@@ -93,5 +97,6 @@ nim c -d:release --path:src -o:/tmp/gift-check tools/check_native_capture.nim
 `RUN` is the proof's printed retained output directory. The checker independently rebuilds native private
 views/requests, simultaneous orders, every control, native hash, replay frame and outcome. Test cases include the full
 720-tick refinery and open-floor families, fenced replies, numeric coercion, clamping, truncation, dropped fields, retry
-and throttled fallback. `--expect-missing` proves the old source's missing artifact with the same complete sentinel
-game. These are runtime proofs, not genuine platform receipts, teacher approval or learning evidence.
+and throttled fallback. Every case also completes without capture, matching native frames, outcomes and all HTTP request
+bodies. `--expect-missing` proves the old source's missing artifact with the same complete sentinel game. These are
+runtime proofs, not genuine platform receipts, teacher approval or learning evidence.

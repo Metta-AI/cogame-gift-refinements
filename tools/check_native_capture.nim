@@ -44,7 +44,10 @@ for round in 1 .. config.rounds:
       doAssert attempt["request"]["messages"] == %*[{"role": "user", "content": user}]
       doAssert attempt["request"]["max_tokens"].getInt() == config.maxOutputTokens
       inc promptsChecked
-      if attempt["attempt_id"] == row["selected_attempt_id"]: selected = attempt
+      if attempt["attempt_id"] == row["selected_attempt_id"] or
+          (row["action_status"].getStr() == "rejected" and
+            attempt["parsed_action"] == row["executed_action"]):
+        selected = attempt
     var order: Order
     if selected != nil:
       order = parseOrder(extractJsonObject(selected["response"].getStr()), seat,
