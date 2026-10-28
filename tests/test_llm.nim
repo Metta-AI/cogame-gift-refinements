@@ -6,11 +6,17 @@ import gift_refinements/prompts
 ## fallback path. The transport is exercised through the real `decide.turn`
 ## with NO credentials, which is the same path certification runs.
 
-import std/[json, monotimes, strutils, times]
+import std/[json, monotimes, os, strutils, times]
 
 import ./helpers
 import curly
 import gift_refinements/[decide, llm]
+
+# These checks explicitly exercise the no-credentials fallback. A developer's
+# shell must never turn them into provider-backed calls. Changes are process-local.
+for key in ["COWORLD_LLM_ENDPOINT", "COWORLD_LLM_MODEL", "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEY_URI", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "AWS_BEARER_TOKEN_BEDROCK"]:
+  delEnv(key)
 
 suite "llm"
 

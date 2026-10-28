@@ -25,11 +25,11 @@
 ## kernel always has an order: this round's, else last round's, else
 ## `reciprocator`'s.
 
-import std/[json, monotimes, os, strutils, times]
+import std/[base64, json, monotimes, options, os, strutils, tables, times, unicode]
 
 import curly
 
-import ./prompts
+import ./prompts, ./decision_trajectory
 
 import ./sim_types, ./sim_config, ./sim, ./orders, ./scripted, ./llm
 
@@ -44,6 +44,12 @@ type
     label*: string
     registered*: bool
 
+  RoundDecision* = object
+    observation*: JsonNode
+    attempts*: seq[DecisionAttempt]
+    selectedAttemptId*: Option[string]
+    status*: ActionStatus
+
   DecisionEngine* = object
     selection*: PromptSelection
     client*: LlmClient
@@ -53,6 +59,21 @@ type
     llmOff*: bool              ## the budget guard fired; scripted from here on
     fallbacks*: int
     llmOrders*: int
+    decisions*: array[SeatCount, RoundDecision]
+
+proc suppliedFieldsEqual(raw, applied: JsonNode): bool =
+  ## Framing is source-supported; field/type/value repairs are separate exclusions.
+  if raw.kind != applied.kind: return false
+  if raw.kind == JObject:
+    for key, value in raw:
+      if not applied.hasKey(key) or not suppliedFieldsEqual(value, applied[key]): return false
+    return true
+  if raw.kind == JArray:
+    if raw.len != applied.len: return false
+    for index in 0 ..< raw.len:
+      if not suppliedFieldsEqual(raw[index], applied[index]): return false
+    return true
+  raw == applied
 
 proc initDecisionEngine*(sim: SimServer, selection: PromptSelection): DecisionEngine =
   result.selection = selection
@@ -435,6 +456,15 @@ proc turn*(
   let
     budget = initDuration(milliseconds = max(1, sim.config.turnBudgetMs))
     turnStart = getMonoTime()
+  for seat in 0 ..< SeatCount:
+    let view = sim.seatView(seat)
+    let scene = sim.scene()
+    let system = systemPrompt(view, scene, engine.selection)
+    let user = userPrompt(view, scene, engine.seats[seat].prompt)
+    var observation = observationJson(view, scene)
+    observation["prompt_template"] = engine.selection.promptMetadata(system, user)
+    observation["scenario_family"] = %scenarioFamily(sim.config)
+    engine.decisions[seat] = RoundDecision(observation: observation, status: asMissing)
   ## Throttle state is PER ROUND: a 429 on round k says nothing about round
   ## k+1 (the sidecar's window may have rolled), so the flag is cleared here
   ## and only suppresses this round's retry.
@@ -505,6 +535,8 @@ proc turn*(
     let deadlineMs =
       if attempt == 0: sim.config.attempt1Ms else: sim.config.retryMs
     var batch: RequestBatch
+    var requests: seq[JsonNode]
+    var prompts: seq[JsonNode]
     for seat in open:
       let view = sim.seatView(seat)
       var user = userPrompt(view, scene, engine.seats[seat].prompt)
@@ -512,6 +544,9 @@ proc turn*(
         user.add(RetryHint)
       let request = engine.client.requestFor(systemPrompt(view, scene, engine.selection), user, seat)
       batch.post(request.url, request.headers, request.body, $seat)
+      requests.add(parseJson(request.body))
+      prompts.add(%*[{"role": "system", "content": systemPrompt(view, scene, engine.selection)},
+        {"role": "user", "content": user}])
     let started = getMonoTime()
     # curly hands the deadline to CURLOPT_TIMEOUT, whose granularity is WHOLE
     # SECONDS, so this conversion FLOORS. sim_config REJECTS a sub-second
@@ -523,16 +558,55 @@ proc turn*(
     var stillOpen: seq[int] = @[]
     for position, seat in open:
       var cause = "parse_error"
+      var evidence = newDecisionAttempt($roundIndex & "-" & $seat & "-" & $(attempt + 1),
+        engine.seats[seat].label, aoModel)
+      evidence.model = some(engine.client.model)
+      evidence.prompt = prompts[position]
+      evidence.request = requests[position]
+      evidence.decoder = %*{"kind": "gift-standing-order-v1", "framing": "native-extractJsonObject",
+        "normalization": "native parseOrder; raw text is never rewritten"}
+      evidence.latencyMs = some(float(latency))
+      let response = responses[position].response
+      if response.code >= 100 and response.code <= 599:
+        evidence.httpStatus = some(response.code)
+      if validateUtf8(response.body) < 0: evidence.rawResponse = %response.body
+      evidence.responseBodyB64 = some(encode(response.body))
+      var headers = initTable[string, string]()
+      for (key, value) in response.headers: headers[key] = value
+      evidence.responseHeaders = some(headers)
+      if response.headers.contains("X-Softmax-Llm-Call-Id"):
+        evidence.platformCallId = some(response.headers["X-Softmax-Llm-Call-Id"])
+      for header in ["request-id", "x-request-id"]:
+        if response.headers.contains(header):
+          evidence.providerRequestId = some(response.headers[header])
+          break
+      # A failed transport has no complete response; never turn it into a zero-call success.
+      evidence.responseComplete = some(responses[position].error.len == 0)
+      evidence.responseReaderJoined = some(true) # synchronous makeRequests has returned
       try:
         let text = engine.client.textOf(
           responses[position].response, responses[position].error,
           batch[position].url)
+        if validateUtf8(text) < 0: evidence.response = %text
+        let payload = parseJson(response.body)
+        if payload{"model"}.kind == JString: evidence.model = some(payload["model"].getStr())
+        if payload{"stop_reason"}.kind == JString: evidence.stopReason = some(payload["stop_reason"].getStr())
+        if payload{"usage", "input_tokens"}.kind == JInt:
+          evidence.inputTokens = some(payload["usage"]["input_tokens"].getInt())
+        if payload{"usage", "output_tokens"}.kind == JInt:
+          evidence.outputTokens = some(payload["usage"]["output_tokens"].getInt())
+        let generated = extractJsonObject(text)
         var order = parseOrder(
-          extractJsonObject(text), seat, scene.names,
+          generated, seat, scene.names,
           sim.config.maxBeamsPerRound)
         order.source = if attempt == 0: osLlm else: osRetry
         order.latencyMs = latency
         sim.installOrder(seat, order)
+        evidence.parsedAction = order.orderJson(scene.names)
+        evidence.decoder["supplied_fields_unchanged"] = %suppliedFieldsEqual(generated, evidence.parsedAction)
+        evidence.accepted = true
+        engine.decisions[seat].selectedAttemptId = some(evidence.attemptId)
+        engine.decisions[seat].status = asAccepted
         engine.llmOrders += 1
       except CatchableError as error:
         if responses[position].error.len > 0:
@@ -546,7 +620,10 @@ proc turn*(
           error.msg))
         echo LogPrefix, "seat ", seat, " attempt ", attempt + 1,
           " failed, falling back if it fails again: ", error.msg
+        evidence.rejectionReason = some(if validateUtf8(error.msg) < 0: error.msg
+          else: "non-UTF8 failure detail; original response bytes retained")
         stillOpen.add(seat)
+      engine.decisions[seat].attempts.add(evidence)
     open = stillOpen
     inc attempt
     if engine.client.throttled and open.len > 0:
@@ -577,3 +654,9 @@ proc turn*(
       ") on round ", roundIndex
 
   engine.repairMissingOrders(sim)
+  for seat in 0 ..< SeatCount:
+    if sim.orders[seat].source == osFallback:
+      engine.decisions[seat].status = asFallback
+    elif engine.decisions[seat].selectedAttemptId.isNone:
+      # External and scripted actions have no authenticated generation. Never label them model/teacher.
+      engine.decisions[seat].status = asMissing

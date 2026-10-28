@@ -17,10 +17,10 @@
 ##
 ## The player protocol is `gift-refinements.player.v2`, JSON text frames.
 
-import ./prompts
+import ./prompts, ./training_capture
 
 import
-  std/[json, locks, monotimes, os, strutils, tables, times]
+  std/[json, locks, monotimes, options, os, strutils, tables, times]
 
 import bitworld/runtime, bitworld/spriteprotocol
 import mummy
@@ -357,6 +357,9 @@ proc runEpisode*(
     if slot < config.players.len and config.players[slot].name.len > 0:
       sim.policyNames[slot] = config.players[slot].name
   var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)))
+  let trajectoryUri = getEnv("COGAME_SAVE_TRAJECTORY_URI")
+  let capture = if trajectoryUri.len > 0: some(newMatchCapture(config))
+    else: none(MatchCapture)
   var tracker = initBroadcastTracker()
 
   initAppState(config)
@@ -450,6 +453,7 @@ proc runEpisode*(
       let elapsed = (getMonoTime() - decisionStart).inMilliseconds.int
       if config.minTurnSeconds * 1000 > elapsed:
         sleep(config.minTurnSeconds * 1000 - elapsed)
+      if capture.isSome: capture.get().beginRound(engine, sim, roundIndex)
       for slot in 0 ..< SeatCount:
         let order = sim.orders[slot]
         sim.events.add(GiftEvent(
@@ -462,12 +466,15 @@ proc runEpisode*(
       for slot in seated:
         sendSeat(slot, observationJson(sim.seatView(slot), sim.scene()))
       for tickInRound in 0 ..< config.ticksPerRound:
-        sim.stepWithKernel()
+        let actions = sim.kernelActions()
+        sim.step(actions)
+        if capture.isSome: capture.get().recordTick(actions, sim)
         let liveEvents = eventsJson(sim.liveEvents)
         for event in liveEvents:
           tracker.ingest(event)
         broadcastFrame(sim, tracker, liveEvents, nil)
       sim.closeRound()
+      if capture.isSome: capture.get().finishRound(sim)
 
   if reason == erDeadline or (reason == erComplete and sim.round < config.rounds):
     # Settle: autobank whatever is still held so the rounds actually played are
@@ -476,6 +483,7 @@ proc runEpisode*(
     # `0 .. ticksPlayed` is unreachable by the playhead (r1 review F1).
     sim.settleEarly()
   sim.finish(reason)
+  if capture.isSome: capture.get().finishMatch(sim, trajectoryUri)
 
   # --- shutdown, in this order ---------------------------------------------
   let results = sim.resultsJson()
