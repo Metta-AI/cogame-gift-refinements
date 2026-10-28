@@ -125,6 +125,17 @@ tools/local_episode.sh 7 hoarder
 episodes respectively; they run in **release only** in CI, via the repo variable
 `NIM_TESTS_RELEASE_ONLY`. Everything else runs twice, debug and release.
 
+The live viewer receives a complete cached sprite snapshot on connection, including
+during the lobby and native model waits. These snapshots never advance the game or
+enter replay history. To check the ordinary clock with six native players and a
+loopback-only model fixture, run `tools/test_native_capture.py GAME PLAYER
+--ordinary-clock --viewer-checker CHECKER --output /tmp/unique-gift-proof`
+using the compiled `tools/check_native_capture.nim` checker and Python with
+`websockets` installed. This bounded system test keeps the 25-second turn spacing,
+delays the first fixture response for 12 seconds, probes viewer startup, reconnects,
+HTTP health and pongs, and completes all 720 ticks with exactly 12 model requests.
+Allow about five minutes; fixture responses are never teacher evidence.
+
 | gate | what it proves |
 |---|---|
 | `test_board.nim` | 72 ring cells, 20 pillar cells, 18 legal pads, full reachability, the beam trace, `pillars: 0` |

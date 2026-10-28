@@ -1,11 +1,39 @@
 ## Independently re-run a complete native game with reciprocator filler seats.
-## Usage: check_native_capture CONFIG TRAJECTORY REPLAY OPERATOR_PROMPT
+## Usage: check_native_capture CONFIG TRAJECTORY REPLAY OPERATOR_PROMPT [VIEWER_PACKETS...]
 import std/[base64, json, os, strutils]
+import bitworld/spriteprotocol
 import gift_refinements/[sim_types, sim_config, sim, orders, scripted, decide, kernel,
-  prompts, replays]
+  prompts, replays, global]
 
 let args = commandLineParams()
-doAssert args.len == 4
+proc checkViewerPacket(path: string, requireLead: bool) =
+  let raw = readFile(path)
+  doAssert raw.len > 0 and raw.len < 1024 * 1024
+  var packet: seq[uint8]
+  raw.blobToBytes(packet)
+  var sprites, objects, chrome = 0
+  for message in parseSpritePacket(packet):
+    case message.kind
+    of spkSprite:
+      inc sprites
+      if message.sprite.id == BroadcastChromeSpriteId:
+        let state = parseJson(message.sprite.label)
+        if requireLead:
+          doAssert state.hasKey("lead") and state["lead"]["pts"].len > 0,
+            "early viewer never received the first physical frame's lead series"
+        inc chrome
+    of spkObject: inc objects
+    else: discard
+  doAssert sprites > 0 and objects > 0 and chrome == 1,
+    "initial/current live packet must contain a complete sprite scene and chrome"
+
+if args.len == 2 and args[0] == "--viewer-first-frame":
+  checkViewerPacket(args[1], true)
+  echo "first physical viewer frame contains its lead history"
+  quit(0)
+doAssert args.len >= 4
+for path in args[4 ..< args.len]:
+  checkViewerPacket(path, path.endsWith("global-first-physical.bin"))
 var config = defaultGameConfig()
 config.update(readFile(args[0]))
 var game = initSimServer(config)

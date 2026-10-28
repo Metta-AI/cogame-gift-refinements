@@ -343,29 +343,35 @@ proc stepMove(sim: var SimServer, actions: openArray[Action]) =
 #  Step 7 -- record
 # ---------------------------------------------------------------------------
 
-proc captureFrame(sim: var SimServer) =
-  var frame = ViewFrame(tick: sim.tick)
+proc currentFrame*(sim: SimServer): ViewFrame =
+  ## A spectator snapshot without advancing physics, hashes or replay history.
+  result = ViewFrame(tick: sim.tick)
   for slot in 0 ..< SeatCount:
     var flags = 0
     if sim.cogs[slot].consumedThisTick: flags = flags or 1
     if sim.cogs[slot].firedThisTick: flags = flags or 2
     if sim.cogs[slot].collectedThisTick: flags = flags or 4
-    frame.cogs[slot] = ViewCog(
+    result.cogs[slot] = ViewCog(
       x: sim.cogs[slot].x,
       y: sim.cogs[slot].y,
       tokens: sim.cogs[slot].tokens,
       score: sim.cogs[slot].score,
       flags: flags
     )
+  for timer in sim.padTimer:
+    result.pads.add(timer == 0)
+
+proc captureFrame(sim: var SimServer) =
+  let frame = sim.currentFrame()
+  for slot in 0 ..< SeatCount:
     mixHash(sim.hash, sim.cogs[slot].x)
     mixHash(sim.hash, sim.cogs[slot].y)
     mixHash(sim.hash, sim.cogs[slot].tokens[0])
     mixHash(sim.hash, sim.cogs[slot].tokens[1])
     mixHash(sim.hash, sim.cogs[slot].tokens[2])
     mixHash(sim.hash, sim.cogs[slot].score)
-    mixHash(sim.hash, flags)
+    mixHash(sim.hash, frame.cogs[slot].flags)
   for i in 0 ..< sim.padTimer.len:
-    frame.pads.add(sim.padTimer[i] == 0)
     mixHash(sim.hash, sim.padTimer[i])
   sim.frames.add(frame)
   sim.pool.add([sim.tick, sim.tokensInPlay()])

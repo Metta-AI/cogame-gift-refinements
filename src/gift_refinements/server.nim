@@ -20,7 +20,7 @@
 import ./prompts, ./training_capture
 
 import
-  std/[json, locks, monotimes, options, os, strutils, tables, times]
+  std/[json, locks, monotimes, options, os, sets, strutils, tables, times]
 
 import bitworld/runtime, bitworld/spriteprotocol
 import mummy
@@ -67,6 +67,9 @@ type
     playerSockets: Table[WebSocket, SeatSocket]
     slotSockets: Table[int, WebSocket]
     globalViewers: Table[WebSocket, GlobalViewerState]
+    readyGlobalViewers: HashSet[WebSocket]
+    currentGlobalPacket: string
+    currentGlobalViewer: GlobalViewerState
     pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string,
       external: bool]]
     decisionId: int
@@ -82,6 +85,7 @@ proc initAppState(config: GameConfig) =
   appState.playerSockets = initTable[WebSocket, SeatSocket]()
   appState.slotSockets = initTable[int, WebSocket]()
   appState.globalViewers = initTable[WebSocket, GlobalViewerState]()
+  appState.readyGlobalViewers = initHashSet[WebSocket]()
   appState.pendingActions = newSeq[JsonNode](SeatCount)
   appState.serving = true
 
@@ -163,7 +167,27 @@ proc websocketHandler(
 ) =
   case event
   of OpenEvent:
-    discard
+    # The simulation thread may be inside a native HTTP call or the unchanged
+    # 25-second round floor. Mummy serves the last complete spectator snapshot
+    # without reading mutable simulation/render state on this worker thread.
+    var packet: string
+    var initial = initGlobalViewerState()
+    {.gcsafe.}:
+      withLock appState.lock:
+        if websocket in appState.globalViewers:
+          packet = appState.currentGlobalPacket
+          initial.leadSent = appState.currentGlobalViewer.leadSent
+          for definition in appState.currentGlobalViewer.defs:
+            initial.defs.add(definition)
+          for id in appState.currentGlobalViewer.objectIds:
+            initial.objectIds.add(id)
+    if packet.len > 0:
+      websocket.send(packet, BinaryMessage)
+      {.gcsafe.}:
+        withLock appState.lock:
+          if websocket in appState.globalViewers:
+            appState.globalViewers[websocket] = initial
+            appState.readyGlobalViewers.incl(websocket)
   of MessageEvent:
     if message.kind == Ping:
       websocket.send(message.data, Pong)
@@ -212,10 +236,31 @@ proc websocketHandler(
           echo "gift-refinements: seat ", slot, " disconnected"
         if websocket in appState.globalViewers:
           appState.globalViewers.del(websocket)
+          appState.readyGlobalViewers.excl(websocket)
 
 # ---------------------------------------------------------------------------
 #  Broadcasting
 # ---------------------------------------------------------------------------
+
+proc cacheGlobalSnapshot(sim: SimServer, tracker: BroadcastTracker,
+                         frame: ViewFrame, over: JsonNode) =
+  ## Encode on the simulation thread, outside the lock. Only immutable packet
+  ## bytes and independent viewer bookkeeping cross into the HTTP workers.
+  let scene = sim.scene()
+  let chrome = buildStateJson(scene, frame, tracker, newJArray(),
+    playing = true, speed = 1.0, maxTick = sim.totalTicks() - 1,
+    looping = false, transportEnabled = false, over = over,
+    leadSeries = sim.pool, beats = beatsJson(sim))
+  var next: GlobalViewerState
+  let packet = buildViewerPacket(scene, frame, newJArray(), chrome,
+    initGlobalViewerState(), next).blobFromBytes()
+  # The pre-tick startup snapshot contains no pool history yet. Its viewer
+  # still needs the original first physical frame's lead series and beats.
+  next.leadSent = sim.pool.len > 0
+  {.gcsafe.}:
+    withLock appState.lock:
+      appState.currentGlobalPacket = packet
+      appState.currentGlobalViewer = next
 
 proc broadcastFrame(sim: SimServer, tracker: BroadcastTracker,
                     events: JsonNode, over: JsonNode) =
@@ -236,9 +281,12 @@ proc broadcastFrame(sim: SimServer, tracker: BroadcastTracker,
     var state: GlobalViewerState
     {.gcsafe.}:
       withLock appState.lock:
-        if socket notin appState.globalViewers:
+        if socket notin appState.globalViewers or
+            socket notin appState.readyGlobalViewers:
           continue
         state = appState.globalViewers[socket]
+    # OpenEvent queues this viewer's complete cached packet before permitting
+    # incremental frames. Never send a delta before its sprite definitions.
     let
       sendLead = not state.leadSent
       chrome = buildStateJson(
@@ -363,6 +411,7 @@ proc runEpisode*(
   var tracker = initBroadcastTracker()
 
   initAppState(config)
+  cacheGlobalSnapshot(sim, tracker, sim.currentFrame(), nil)
   let httpServer = newServer(httpHandler, websocketHandler, workerThreads = 4)
   var serverThread: Thread[tuple[server: ptr Server, host: string, port: int]]
   proc serve(args: tuple[server: ptr Server, host: string, port: int]) {.thread.} =
@@ -477,6 +526,7 @@ proc runEpisode*(
           tracker.ingest(event)
         broadcastFrame(sim, tracker, liveEvents, nil)
       sim.closeRound()
+      cacheGlobalSnapshot(sim, tracker, sim.frames[^1], nil)
       if capture.isSome: capture.get().finishRound(sim)
 
   if reason == erDeadline or (reason == erComplete and sim.round < config.rounds):
@@ -491,6 +541,7 @@ proc runEpisode*(
   # --- shutdown, in this order ---------------------------------------------
   let results = sim.resultsJson()
   let over = overJson(sim.scene(), results, tracker, max(0, sim.tick - 1))
+  cacheGlobalSnapshot(sim, tracker, sim.frames[^1], over)
   # The note's §Server: the `state` frame goes out at every round boundary AND
   # at episode end (r1 review F13). A seat that keeps its own book of the match
   # gets the settled position -- every score, every held pile after the
