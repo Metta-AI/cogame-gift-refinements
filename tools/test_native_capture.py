@@ -239,13 +239,21 @@ def run_case(
         )
         processes.append(process)
         deadline = time.monotonic() + (420 if ordinary_clock else 60)
+        startup_deadline = min(deadline, time.monotonic() + 180)
         while True:
             assert process.poll() is None, (root / "game.log").read_text()[-2000:]
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    # Docker's published port can accept TCP before the guest
+                    # serves HTTP. Require the actual game contract first.
+                    with urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.5
+                    ) as response:
+                        if response.status != 200:
+                            raise OSError("game HTTP health is not ready")
                     break
             except OSError:
-                assert time.monotonic() < deadline
+                assert time.monotonic() < startup_deadline
                 time.sleep(0.05)
         if ordinary_clock:
             viewer = threading.Thread(
