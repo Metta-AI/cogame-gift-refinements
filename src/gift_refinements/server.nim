@@ -71,7 +71,7 @@ type
     currentGlobalPacket: string
     currentGlobalViewer: GlobalViewerState
     pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string,
-      external: bool]]
+      external: bool, socket: WebSocket]]
     decisionId: int
     pendingActions: seq[JsonNode]
     closed: seq[WebSocket]
@@ -146,11 +146,18 @@ proc httpHandler(request: Request) =
       request.respond(403, headers, "bad slot or token\n")
       return
     let websocket = request.upgradeToWebSocket()
+    var claimed = false
     {.gcsafe.}:
       withLock appState.lock:
-        appState.playerSockets[websocket] =
-          SeatSocket(slot: slot, token: token)
-        appState.slotSockets[slot] = websocket
+        # Revalidate after upgrade, under the assignment lock.
+        if slot notin appState.slotSockets:
+          appState.playerSockets[websocket] =
+            SeatSocket(slot: slot, token: token)
+          appState.slotSockets[slot] = websocket
+          claimed = true
+    if not claimed:
+      websocket.close()
+      return
     echo "gift-refinements: seat ", slot, " connected"
   elif request.path == GlobalWsPath and request.isWebSocketUpgrade():
     let websocket = request.upgradeToWebSocket()
@@ -202,6 +209,8 @@ proc websocketHandler(
         if websocket notin appState.playerSockets:
           return
         let slot = appState.playerSockets[websocket].slot
+        if slot notin appState.slotSockets or appState.slotSockets[slot] != websocket:
+          return
         var payload: JsonNode
         try:
           payload = parseJson(message.data)
@@ -213,11 +222,11 @@ proc websocketHandler(
         case payload{"type"}.getStr()
         of "prompt":
           appState.pendingRegistrations.add((slot,
-            payload{"prompt"}.getStr(), payload{"scripted"}.getStr(), false))
+            payload{"prompt"}.getStr(), payload{"scripted"}.getStr(), false, websocket))
         of "register":
           if payload["control"].getStr() != "external":
             return
-          appState.pendingRegistrations.add((slot, "", "", true))
+          appState.pendingRegistrations.add((slot, "", "", true, websocket))
         of "action":
           if payload["id"].getInt() == appState.decisionId and
               appState.pendingActions[slot].isNil:
@@ -231,7 +240,7 @@ proc websocketHandler(
         if websocket in appState.playerSockets:
           let slot = appState.playerSockets[websocket].slot
           appState.playerSockets.del(websocket)
-          if slot in appState.slotSockets:
+          if slot in appState.slotSockets and appState.slotSockets[slot] == websocket:
             appState.slotSockets.del(slot)
           echo "gift-refinements: seat ", slot, " disconnected"
         if websocket in appState.globalViewers:
@@ -332,35 +341,34 @@ proc drainRegistrations(engine: var DecisionEngine): int =
   ## registration is HELD and re-applied rather than dropped: joins race the
   ## lobby, and a dropped registration silently made a champion seat play
   ## scripted (paintball, 2026-08-25).
-  var pending: seq[tuple[slot: int, prompt, scripted: string,
-    external: bool]] = @[]
   {.gcsafe.}:
     withLock appState.lock:
-      pending = appState.pendingRegistrations
+      for item in appState.pendingRegistrations:
+        if item.slot notin appState.slotSockets or appState.slotSockets[item.slot] != item.socket:
+          continue
+        if item.slot < 0 or item.slot >= SeatCount:
+          continue
+        if engine.seats[item.slot].registered:
+          continue
+        engine.seats[item.slot].registered = true
+        if item.external:
+          engine.seats[item.slot].isExternal = true
+          engine.seats[item.slot].label = "external"
+          engine.seats[item.slot].baseline = blReciprocator
+        elif item.prompt.len > 0:
+          engine.seats[item.slot].isLlm = true
+          engine.seats[item.slot].prompt = item.prompt
+          engine.seats[item.slot].label = "prompt"
+          engine.seats[item.slot].baseline = blReciprocator
+        else:
+          engine.seats[item.slot].isLlm = false
+          engine.seats[item.slot].baseline = parseBaseline(item.scripted)
+          engine.seats[item.slot].label = $engine.seats[item.slot].baseline
+        echo registerRecord(item.slot, engine.seats[item.slot].label,
+          engine.policyKind(item.slot),
+          $engine.seats[item.slot].baseline)
+        inc result
       appState.pendingRegistrations = @[]
-  for item in pending:
-    if item.slot < 0 or item.slot >= SeatCount:
-      continue
-    if engine.seats[item.slot].registered:
-      continue
-    engine.seats[item.slot].registered = true
-    if item.external:
-      engine.seats[item.slot].isExternal = true
-      engine.seats[item.slot].label = "external"
-      engine.seats[item.slot].baseline = blReciprocator
-    elif item.prompt.len > 0:
-      engine.seats[item.slot].isLlm = true
-      engine.seats[item.slot].prompt = item.prompt
-      engine.seats[item.slot].label = "prompt"
-      engine.seats[item.slot].baseline = blReciprocator
-    else:
-      engine.seats[item.slot].isLlm = false
-      engine.seats[item.slot].baseline = parseBaseline(item.scripted)
-      engine.seats[item.slot].label = $engine.seats[item.slot].baseline
-    echo registerRecord(item.slot, engine.seats[item.slot].label,
-      engine.policyKind(item.slot),
-      $engine.seats[item.slot].baseline)
-    inc result
 
 proc connectedSeats(): seq[int] =
   {.gcsafe.}:

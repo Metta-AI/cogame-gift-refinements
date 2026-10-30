@@ -135,3 +135,31 @@ defaults remain eligible; native parsing, retry behavior, installed actions and 
 retain the entire original completion and applied action with no selected training target. Run the same partial system
 proof with `--grammar` for duplicate/conflicting keys, comments, numeric spelling, trailing commas, depth, whitespace
 and first-object selection controls. Responses the native parser already rejects still take its ordinary retry path.
+
+### Seat socket ownership
+
+An occupied token-authenticated seat rejects another socket after the upgrade
+under the same lock that assigns ownership. Only its current socket may submit
+frames or commit a queued registration, and closing an older socket cannot remove
+a successor. Registration becomes accepted when the simulation commits it while
+that socket still owns the seat. Once accepted, a native prompt is game-owned and
+persists after disconnection; later registration cannot replace it. Unregistered
+seats retain the ordinary Reciprocator default.
+
+The focused check uses the existing native-capture harness:
+
+```bash
+python tools/test_native_capture.py GAME PLAYER --ownership-only green --output /tmp/unique-gift-ownership
+python tools/test_native_capture.py GAME PLAYER --ordinary-clock --viewer-checker CHECKER --output /tmp/unique-gift-ordinary
+```
+
+The first command checks real token rejection, competing same-seat upgrades and
+continued current-owner play. The ordinary command completes 12 rounds and 720
+ticks with the unchanged 25-second floor and 12 synthetic native requests. It
+disconnects the prompt registrar after its first request, then connects a successor
+that tries an external registration; later native requests must retain the accepted
+prompt. These loopback responses are runtime fixtures, never teacher data.
+Unforced stale callback and registration/close interleavings remain coverage gaps.
+Historical ordinary-proof source manifests are preserved: their pre-strict
+`decide.nim` differs from the later strict capture-admission implementation, so
+those older runs must not be described as proofs of the later source.

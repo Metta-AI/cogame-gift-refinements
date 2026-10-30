@@ -68,7 +68,7 @@ def observe_globals(port, root, stop, failures, checker):
                         )
                 if time.monotonic() >= next_ping:
                     assert live.ping().wait(2), "viewer pong starved during native wait"
-                    next_ping = time.monotonic() + 1
+                    next_ping = time.monotonic() + 5
                 if time.monotonic() < next_snapshot:
                     continue
                 for path in ("healthz", "client/global"):
@@ -89,7 +89,7 @@ def observe_globals(port, root, stop, failures, checker):
                     observations.append(
                         {"kind": "reconnect", "seconds": time.monotonic() - started}
                     )
-                next_snapshot = time.monotonic() + 8
+                next_snapshot = time.monotonic() + 15
     except (
         AssertionError,
         OSError,
@@ -118,6 +118,20 @@ def run_case(
     root = output / (mode if capture else mode + "-no-capture")
     root.mkdir(mode=0o700)
     records = []
+    disconnected = []
+    replacement_observations = []
+    native_socket = None
+    disconnect_thread = None
+    source_root = Path(__file__).resolve().parents[1]
+    source_pins = {
+        str(f.relative_to(source_root)): hashlib.sha256(f.read_bytes()).hexdigest()
+        for f in sorted((source_root / "src").rglob("*.nim"))
+    }
+    source_pins["game_binary"] = hashlib.sha256(game.read_bytes()).hexdigest()
+    (root / "source-manifest.json").write_text(json.dumps(source_pins, indent=2))
+    source_id = hashlib.sha256(
+        json.dumps(source_pins, sort_keys=True).encode()
+    ).hexdigest()
 
     class Sentinel(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
@@ -212,7 +226,7 @@ def run_case(
         COWORLD_LLM_MODEL="local/capture-sentinel",
         COWORLD_EPISODE_ID="local-" + mode,
         COWORLD_GAME_VERSION="local-fixture",
-        COWORLD_SOURCE_REVISION="local-source-fixture",
+        COWORLD_SOURCE_REVISION="local-source-sha256-" + source_id,
         COGAME_SAVE_TRAJECTORY_URI=(root / "trajectory.jsonl").as_uri(),
     )
     if not capture:
@@ -262,6 +276,47 @@ def run_case(
             )
             viewer.start()
         for seat in range(6):
+            if ordinary_clock and seat == 0:
+                from websockets.sync.client import connect
+
+                native_socket = connect(
+                    f"ws://127.0.0.1:{port}/player?slot=0&token=t0",
+                    open_timeout=2,
+                    legacy=True,
+                )
+                native_socket.send(
+                    json.dumps(
+                        {
+                            "type": "prompt",
+                            "prompt": "Local sentinel protocol test only.",
+                        }
+                    )
+                )
+
+                def disconnect_after_first_request(registered_socket=native_socket):
+                    while not records and process.poll() is None:
+                        time.sleep(0.02)
+                    if records:
+                        disconnected.append(time.monotonic())
+                        registered_socket.close()
+                        # A successor socket must not replace the already committed
+                        # game-owned prompt with an external policy.
+                        with connect(
+                            f"ws://127.0.0.1:{port}/player?slot=0&token=t0",
+                            open_timeout=2,
+                        ) as successor:
+                            successor.send(
+                                json.dumps({"type": "register", "control": "external"})
+                            )
+                            replacement_observations.append(
+                                json.loads(successor.recv(timeout=40))
+                            )
+
+                disconnect_thread = threading.Thread(
+                    target=disconnect_after_first_request
+                )
+                disconnect_thread.start()
+                continue
             seat_env = dict(
                 env,
                 COWORLD_PLAYER_WS_URL=f"ws://127.0.0.1:{port}/player?slot={seat}&token=t{seat}",
@@ -288,6 +343,11 @@ def run_case(
                 time.sleep(0.05)
             assert p.returncode == 0
     finally:
+        if native_socket:
+            native_socket.close()
+        if disconnect_thread:
+            disconnect_thread.join(timeout=3)
+        (root / "native-disconnect.json").write_text(json.dumps(disconnected))
         viewer_stop.set()
         if viewer:
             viewer.join(timeout=10)
@@ -303,6 +363,14 @@ def run_case(
     if ordinary_clock:
         assert not viewer_failures, viewer_failures
         assert len(records) == 12
+        assert (
+            len(disconnected) == 1
+            and records[-1]["received_at_monotonic"] > disconnected[0] + 250
+        )
+        assert len(replacement_observations) == 1
+        (root / "successor-observation.json").write_text(
+            json.dumps(replacement_observations[0], indent=2)
+        )
         assert all(
             b["received_at_monotonic"] - a["received_at_monotonic"] >= 24.5
             for a, b in pairwise(records)
@@ -420,6 +488,123 @@ def run_case(
     }
 
 
+def run_ownership_case(game, output, expect):
+    """One actual token-authenticated duplicate upgrade; no provider or model seat."""
+    from websockets.exceptions import ConnectionClosed, InvalidHandshake
+    from websockets.sync.client import connect
+
+    root = output / ("ownership-" + expect)
+    root.mkdir(parents=True, mode=0o700)
+    port = free_port()
+    config = {
+        "num_agents": 6,
+        "rounds": 2,
+        "ticksPerRound": 60,
+        "minTurnSeconds": 0,
+        "playerConnectTimeoutSeconds": 2,
+        "shutdownGraceSeconds": 0,
+        "tokens": [f"t{s}" for s in range(6)],
+    }
+    (root / "config.json").write_text(json.dumps(config))
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("AWS_", "ANTHROPIC_", "COWORLD_", "COGAME_", "PLAYER_"))
+    }
+    sockets = []
+    observations = {}
+    with (root / "game.log").open("wb") as log:
+        process = subprocess.Popen(
+            [
+                str(game),
+                "--host:127.0.0.1",
+                f"--port:{port}",
+                "--config-path:" + str(root / "config.json"),
+                "--results-uri:" + (root / "results.json").as_uri(),
+                "--save-replay-uri:" + (root / "replay.json").as_uri(),
+            ],
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    with urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.2
+                    ) as response:
+                        assert response.status == 200
+                    break
+                except OSError:
+                    assert process.poll() is None and time.monotonic() < deadline
+                    time.sleep(0.05)
+            try:
+                connect(
+                    f"ws://127.0.0.1:{port}/player?slot=0&token=wrong",
+                    open_timeout=1,
+                    legacy=True,
+                )
+            except InvalidHandshake:
+                observations["bad_token_refused"] = True
+            else:
+                raise AssertionError("bad token accepted")
+            owner = connect(
+                f"ws://127.0.0.1:{port}/player?slot=0&token=t0",
+                open_timeout=1,
+                legacy=True,
+            )
+            sockets.append(owner)
+            newcomer = connect(
+                f"ws://127.0.0.1:{port}/player?slot=0&token=t0",
+                open_timeout=1,
+                legacy=True,
+            )
+            sockets.append(newcomer)
+            try:
+                observations["newcomer_open"] = newcomer.ping().wait(0.4)
+            except ConnectionClosed:
+                observations["newcomer_open"] = False
+            if expect == "red":
+                assert observations["newcomer_open"], (
+                    "old duplicate ownership not reproduced"
+                )
+                # The overwritten owner's close removes the successor mapping.
+                owner.close()
+                newcomer.send(
+                    json.dumps({"type": "prompt", "scripted": "reciprocator"})
+                )
+            else:
+                assert not observations["newcomer_open"], (
+                    "occupied seat newcomer remained live"
+                )
+                assert owner.ping().wait(1), "rejected newcomer damaged current owner"
+                owner.send(json.dumps({"type": "prompt", "scripted": "reciprocator"}))
+                # Closed newcomer cannot inject an alternative registration/action.
+                try:
+                    newcomer.send(
+                        json.dumps({"type": "register", "control": "external"})
+                    )
+                except ConnectionClosed:
+                    observations["rejected_frame_closed"] = True
+            process.wait(timeout=10)
+            assert process.returncode == 0
+            result = json.loads((root / "results.json").read_text())
+            observations["reason"] = result["reason"]
+            assert result["reason"] == ("forfeit" if expect == "red" else "complete")
+            if expect == "green":
+                replay = json.loads((root / "replay.json").read_text())
+                assert len(replay["frames"]) == 120
+        finally:
+            for ws in sockets:
+                ws.close()
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3)
+            (root / "observations.json").write_text(json.dumps(observations, indent=2))
+    return observations
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("game", type=Path)
@@ -427,6 +612,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--expect-missing", action="store_true")
     parser.add_argument("--ordinary-clock", action="store_true")
+    parser.add_argument("--ownership-only", choices=("red", "green"))
     parser.add_argument("--viewer-checker", type=Path)
     args = parser.parse_args()
     if args.ordinary_clock:
@@ -439,6 +625,10 @@ def main():
         else Path(tempfile.mkdtemp(prefix="gift-native-capture-"))
     )
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.ownership_only:
+        result = run_ownership_case(args.game.resolve(), output, args.ownership_only)
+        (output / "result.json").write_text(json.dumps(result, indent=2))
+        return
     modes = (
         [("success", "open-floor")]
         if args.ordinary_clock
