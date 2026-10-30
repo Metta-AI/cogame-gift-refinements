@@ -17,10 +17,10 @@
 ##
 ## The player protocol is `gift-refinements.player.v2`, JSON text frames.
 
-import ./prompts
+import ./prompts, ./training_capture
 
 import
-  std/[json, locks, monotimes, os, strutils, tables, times]
+  std/[json, locks, monotimes, options, os, sets, strutils, tables, times]
 
 import bitworld/runtime, bitworld/spriteprotocol
 import mummy
@@ -67,8 +67,11 @@ type
     playerSockets: Table[WebSocket, SeatSocket]
     slotSockets: Table[int, WebSocket]
     globalViewers: Table[WebSocket, GlobalViewerState]
+    readyGlobalViewers: HashSet[WebSocket]
+    currentGlobalPacket: string
+    currentGlobalViewer: GlobalViewerState
     pendingRegistrations: seq[tuple[slot: int, prompt, scripted: string,
-      external: bool]]
+      external: bool, socket: WebSocket]]
     decisionId: int
     pendingActions: seq[JsonNode]
     closed: seq[WebSocket]
@@ -82,6 +85,7 @@ proc initAppState(config: GameConfig) =
   appState.playerSockets = initTable[WebSocket, SeatSocket]()
   appState.slotSockets = initTable[int, WebSocket]()
   appState.globalViewers = initTable[WebSocket, GlobalViewerState]()
+  appState.readyGlobalViewers = initHashSet[WebSocket]()
   appState.pendingActions = newSeq[JsonNode](SeatCount)
   appState.serving = true
 
@@ -142,11 +146,18 @@ proc httpHandler(request: Request) =
       request.respond(403, headers, "bad slot or token\n")
       return
     let websocket = request.upgradeToWebSocket()
+    var claimed = false
     {.gcsafe.}:
       withLock appState.lock:
-        appState.playerSockets[websocket] =
-          SeatSocket(slot: slot, token: token)
-        appState.slotSockets[slot] = websocket
+        # Revalidate after upgrade, under the assignment lock.
+        if slot notin appState.slotSockets:
+          appState.playerSockets[websocket] =
+            SeatSocket(slot: slot, token: token)
+          appState.slotSockets[slot] = websocket
+          claimed = true
+    if not claimed:
+      websocket.close()
+      return
     echo "gift-refinements: seat ", slot, " connected"
   elif request.path == GlobalWsPath and request.isWebSocketUpgrade():
     let websocket = request.upgradeToWebSocket()
@@ -163,7 +174,27 @@ proc websocketHandler(
 ) =
   case event
   of OpenEvent:
-    discard
+    # The simulation thread may be inside a native HTTP call or the unchanged
+    # 25-second round floor. Mummy serves the last complete spectator snapshot
+    # without reading mutable simulation/render state on this worker thread.
+    var packet: string
+    var initial = initGlobalViewerState()
+    {.gcsafe.}:
+      withLock appState.lock:
+        if websocket in appState.globalViewers:
+          packet = appState.currentGlobalPacket
+          initial.leadSent = appState.currentGlobalViewer.leadSent
+          for definition in appState.currentGlobalViewer.defs:
+            initial.defs.add(definition)
+          for id in appState.currentGlobalViewer.objectIds:
+            initial.objectIds.add(id)
+    if packet.len > 0:
+      websocket.send(packet, BinaryMessage)
+      {.gcsafe.}:
+        withLock appState.lock:
+          if websocket in appState.globalViewers:
+            appState.globalViewers[websocket] = initial
+            appState.readyGlobalViewers.incl(websocket)
   of MessageEvent:
     if message.kind == Ping:
       websocket.send(message.data, Pong)
@@ -178,6 +209,8 @@ proc websocketHandler(
         if websocket notin appState.playerSockets:
           return
         let slot = appState.playerSockets[websocket].slot
+        if slot notin appState.slotSockets or appState.slotSockets[slot] != websocket:
+          return
         var payload: JsonNode
         try:
           payload = parseJson(message.data)
@@ -189,11 +222,11 @@ proc websocketHandler(
         case payload{"type"}.getStr()
         of "prompt":
           appState.pendingRegistrations.add((slot,
-            payload{"prompt"}.getStr(), payload{"scripted"}.getStr(), false))
+            payload{"prompt"}.getStr(), payload{"scripted"}.getStr(), false, websocket))
         of "register":
           if payload["control"].getStr() != "external":
             return
-          appState.pendingRegistrations.add((slot, "", "", true))
+          appState.pendingRegistrations.add((slot, "", "", true, websocket))
         of "action":
           if payload["id"].getInt() == appState.decisionId and
               appState.pendingActions[slot].isNil:
@@ -207,15 +240,36 @@ proc websocketHandler(
         if websocket in appState.playerSockets:
           let slot = appState.playerSockets[websocket].slot
           appState.playerSockets.del(websocket)
-          if slot in appState.slotSockets:
+          if slot in appState.slotSockets and appState.slotSockets[slot] == websocket:
             appState.slotSockets.del(slot)
           echo "gift-refinements: seat ", slot, " disconnected"
         if websocket in appState.globalViewers:
           appState.globalViewers.del(websocket)
+          appState.readyGlobalViewers.excl(websocket)
 
 # ---------------------------------------------------------------------------
 #  Broadcasting
 # ---------------------------------------------------------------------------
+
+proc cacheGlobalSnapshot(sim: SimServer, tracker: BroadcastTracker,
+                         frame: ViewFrame, over: JsonNode) =
+  ## Encode on the simulation thread, outside the lock. Only immutable packet
+  ## bytes and independent viewer bookkeeping cross into the HTTP workers.
+  let scene = sim.scene()
+  let chrome = buildStateJson(scene, frame, tracker, newJArray(),
+    playing = true, speed = 1.0, maxTick = sim.totalTicks() - 1,
+    looping = false, transportEnabled = false, over = over,
+    leadSeries = sim.pool, beats = beatsJson(sim))
+  var next: GlobalViewerState
+  let packet = buildViewerPacket(scene, frame, newJArray(), chrome,
+    initGlobalViewerState(), next).blobFromBytes()
+  # The pre-tick startup snapshot contains no pool history yet. Its viewer
+  # still needs the original first physical frame's lead series and beats.
+  next.leadSent = sim.pool.len > 0
+  {.gcsafe.}:
+    withLock appState.lock:
+      appState.currentGlobalPacket = packet
+      appState.currentGlobalViewer = next
 
 proc broadcastFrame(sim: SimServer, tracker: BroadcastTracker,
                     events: JsonNode, over: JsonNode) =
@@ -236,9 +290,12 @@ proc broadcastFrame(sim: SimServer, tracker: BroadcastTracker,
     var state: GlobalViewerState
     {.gcsafe.}:
       withLock appState.lock:
-        if socket notin appState.globalViewers:
+        if socket notin appState.globalViewers or
+            socket notin appState.readyGlobalViewers:
           continue
         state = appState.globalViewers[socket]
+    # OpenEvent queues this viewer's complete cached packet before permitting
+    # incremental frames. Never send a delta before its sprite definitions.
     let
       sendLead = not state.leadSent
       chrome = buildStateJson(
@@ -284,35 +341,34 @@ proc drainRegistrations(engine: var DecisionEngine): int =
   ## registration is HELD and re-applied rather than dropped: joins race the
   ## lobby, and a dropped registration silently made a champion seat play
   ## scripted (paintball, 2026-08-25).
-  var pending: seq[tuple[slot: int, prompt, scripted: string,
-    external: bool]] = @[]
   {.gcsafe.}:
     withLock appState.lock:
-      pending = appState.pendingRegistrations
+      for item in appState.pendingRegistrations:
+        if item.slot notin appState.slotSockets or appState.slotSockets[item.slot] != item.socket:
+          continue
+        if item.slot < 0 or item.slot >= SeatCount:
+          continue
+        if engine.seats[item.slot].registered:
+          continue
+        engine.seats[item.slot].registered = true
+        if item.external:
+          engine.seats[item.slot].isExternal = true
+          engine.seats[item.slot].label = "external"
+          engine.seats[item.slot].baseline = blReciprocator
+        elif item.prompt.len > 0:
+          engine.seats[item.slot].isLlm = true
+          engine.seats[item.slot].prompt = item.prompt
+          engine.seats[item.slot].label = "prompt"
+          engine.seats[item.slot].baseline = blReciprocator
+        else:
+          engine.seats[item.slot].isLlm = false
+          engine.seats[item.slot].baseline = parseBaseline(item.scripted)
+          engine.seats[item.slot].label = $engine.seats[item.slot].baseline
+        echo registerRecord(item.slot, engine.seats[item.slot].label,
+          engine.policyKind(item.slot),
+          $engine.seats[item.slot].baseline)
+        inc result
       appState.pendingRegistrations = @[]
-  for item in pending:
-    if item.slot < 0 or item.slot >= SeatCount:
-      continue
-    if engine.seats[item.slot].registered:
-      continue
-    engine.seats[item.slot].registered = true
-    if item.external:
-      engine.seats[item.slot].isExternal = true
-      engine.seats[item.slot].label = "external"
-      engine.seats[item.slot].baseline = blReciprocator
-    elif item.prompt.len > 0:
-      engine.seats[item.slot].isLlm = true
-      engine.seats[item.slot].prompt = item.prompt
-      engine.seats[item.slot].label = "prompt"
-      engine.seats[item.slot].baseline = blReciprocator
-    else:
-      engine.seats[item.slot].isLlm = false
-      engine.seats[item.slot].baseline = parseBaseline(item.scripted)
-      engine.seats[item.slot].label = $engine.seats[item.slot].baseline
-    echo registerRecord(item.slot, engine.seats[item.slot].label,
-      engine.policyKind(item.slot),
-      $engine.seats[item.slot].baseline)
-    inc result
 
 proc connectedSeats(): seq[int] =
   {.gcsafe.}:
@@ -356,10 +412,19 @@ proc runEpisode*(
   for slot in 0 ..< SeatCount:
     if slot < config.players.len and config.players[slot].name.len > 0:
       sim.policyNames[slot] = config.players[slot].name
-  var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)))
+  let trajectoryUri = getEnv("COGAME_SAVE_TRAJECTORY_URI")
+  var engine = initDecisionEngine(sim, promptSelection(parseJson(runtime.config)), trajectoryUri.len > 0)
+  var capture = none(MatchCapture)
+  if engine.captureEnabled:
+    try: capture = some(newMatchCapture(config))
+    except CatchableError as error:
+      # Optional private metadata faults must not change native play/public artifacts.
+      engine.captureEnabled = false
+      echo "gift-refinements: private capture initialization failed: ", safeDiagnostic(error.msg)
   var tracker = initBroadcastTracker()
 
   initAppState(config)
+  cacheGlobalSnapshot(sim, tracker, sim.currentFrame(), nil)
   let httpServer = newServer(httpHandler, websocketHandler, workerThreads = 4)
   var serverThread: Thread[tuple[server: ptr Server, host: string, port: int]]
   proc serve(args: tuple[server: ptr Server, host: string, port: int]) {.thread.} =
@@ -450,6 +515,7 @@ proc runEpisode*(
       let elapsed = (getMonoTime() - decisionStart).inMilliseconds.int
       if config.minTurnSeconds * 1000 > elapsed:
         sleep(config.minTurnSeconds * 1000 - elapsed)
+      if capture.isSome: capture.get().beginRound(engine, sim, roundIndex)
       for slot in 0 ..< SeatCount:
         let order = sim.orders[slot]
         sim.events.add(GiftEvent(
@@ -462,12 +528,19 @@ proc runEpisode*(
       for slot in seated:
         sendSeat(slot, observationJson(sim.seatView(slot), sim.scene()))
       for tickInRound in 0 ..< config.ticksPerRound:
-        sim.stepWithKernel()
+        if engine.captureEnabled:
+          let actions = sim.kernelActions()
+          sim.step(actions)
+          capture.get().recordTick(actions, sim)
+        else:
+          sim.stepWithKernel()
         let liveEvents = eventsJson(sim.liveEvents)
         for event in liveEvents:
           tracker.ingest(event)
         broadcastFrame(sim, tracker, liveEvents, nil)
       sim.closeRound()
+      cacheGlobalSnapshot(sim, tracker, sim.frames[^1], nil)
+      if capture.isSome: capture.get().finishRound(sim)
 
   if reason == erDeadline or (reason == erComplete and sim.round < config.rounds):
     # Settle: autobank whatever is still held so the rounds actually played are
@@ -476,10 +549,12 @@ proc runEpisode*(
     # `0 .. ticksPlayed` is unreachable by the playhead (r1 review F1).
     sim.settleEarly()
   sim.finish(reason)
+  if capture.isSome: capture.get().finishMatch(sim, trajectoryUri)
 
   # --- shutdown, in this order ---------------------------------------------
   let results = sim.resultsJson()
   let over = overJson(sim.scene(), results, tracker, max(0, sim.tick - 1))
+  cacheGlobalSnapshot(sim, tracker, sim.frames[^1], over)
   # The note's §Server: the `state` frame goes out at every round boundary AND
   # at episode end (r1 review F13). A seat that keeps its own book of the match
   # gets the settled position -- every score, every held pile after the
